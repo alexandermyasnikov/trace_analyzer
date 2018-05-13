@@ -5,5 +5,5 @@ all:
 	gcc -S hello.c -o hello.s
 
 clean:
-	rm hello hello.dump hello.s
+	rm -rf hello hello.dump hello.s
 
