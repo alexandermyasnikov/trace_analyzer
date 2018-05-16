@@ -141,7 +141,7 @@ Elf64_Addr lookup_symbol(Elf64_Ehdr* elf_hdr, const char *symname) {
     Elf64_Shdr* elf_shdr = (Elf64_Shdr*) ((void*) elf_hdr + elf_hdr->e_shoff + i * sizeof(Elf64_Shdr));
     if (elf_shdr->sh_type == SHT_STRTAB) {
       char* name = (((char*) elf_hdr) + elf_shdr->sh_offset);
-      for (unsigned long j = 0; i < elf_shdr->sh_size;) {
+      for (unsigned long j = 0; j < elf_shdr->sh_size;) {
         fprintf(stderr, "name:  %lx '%s'   \n", j, name + j);
         if(strcmp(&name[j], symname) == 0) {
           offset = j;
@@ -154,8 +154,8 @@ Elf64_Addr lookup_symbol(Elf64_Ehdr* elf_hdr, const char *symname) {
   for (unsigned long i = 0; i < elf_hdr->e_shnum; ++i) {
     Elf64_Shdr* elf_shdr = (Elf64_Shdr*) ((void*) elf_hdr + elf_hdr->e_shoff + i * sizeof(Elf64_Shdr));
     if (elf_shdr->sh_type == SHT_SYMTAB) {
-      for (unsigned long i = 0; i < elf_shdr->sh_size; i += sizeof(Elf64_Sym)) {
-        Elf64_Sym* symtab = (Elf64_Sym*) (((char*) elf_hdr) + elf_shdr->sh_offset + i);
+      for (unsigned long j = 0; j < elf_shdr->sh_size; j += sizeof(Elf64_Sym)) {
+        Elf64_Sym* symtab = (Elf64_Sym*) (((char*) elf_hdr) + elf_shdr->sh_offset + j);
         if (symtab->st_name == offset) {
           return symtab->st_value;
         }
@@ -165,40 +165,57 @@ Elf64_Addr lookup_symbol(Elf64_Ehdr* elf_hdr, const char *symname) {
   return 0;
 }
 
+int open_elf(const char* filename, int* fd, off_t* st_size, Elf64_Ehdr** elf) {
+  struct stat st;
+  *fd = open(filename, O_RDONLY);
+
+  if (*fd < 0) {
+    perror("open");
+    return -1;
+  }
+
+  if (fstat(*fd, &st) < 0) {
+    perror("fstat");
+    return -1;
+  }
+
+  *st_size = st.st_size;
+
+  void* addr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, *fd, 0);
+  if (addr == MAP_FAILED) {
+    perror("mmap");
+    return -1;
+  }
+
+  *elf = (Elf64_Ehdr*) addr;
+}
+
+int close_elf(int* fd, off_t* st_size, Elf64_Ehdr** elf) {
+  munmap(*elf, *st_size);
+  close(*fd);
+}
+
 int main(int argc, char ** argv/*, char** envp*/) {
   if (argc < 2) {
     fprintf(stderr, "Usage: %s elffile \n", argv[0]);
     exit(-1);
   }
 
-  struct stat st;
-  int fd = open(argv[1], O_RDONLY);
+  int fd;
+  off_t st_size;
+  Elf64_Ehdr* elf;
 
-  if (fd < 0) {
-    perror("open");
-    exit(-1);
+  if (open_elf(argv[1], &fd, &st_size, &elf)) {
+    perror("open_elf");
   }
 
-  if (fstat(fd, &st) < 0) {
-    perror("fstat");
-    exit(-1);
-  }
+  print_elf(elf);
+  Elf64_Addr addr = lookup_symbol(elf, "func");
+  fprintf(stderr, "addr: %lx \n", addr);
 
-  void* addr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-  if (addr == MAP_FAILED) {
-    perror("mmap");
-    exit(-1);
+  if (close_elf(&fd, &st_size, &elf)) {
+    perror("close_elf");
   }
-
-  Elf64_Ehdr* elf = (Elf64_Ehdr*) addr;
-  if (print_elf(elf)) {
-    perror("read_elf");
-  } else {
-    ;
-  }
-
-  munmap(addr, st.st_size);
-  close(fd);
 
   return 0;
 }
