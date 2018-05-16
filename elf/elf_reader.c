@@ -9,9 +9,9 @@
 #include <unistd.h>
 #include <elf.h>
 
-void read_elf(void* addr, int size) {
-  if (sizeof(Elf64_Ehdr) > (size_t) size)
-    return;
+int print_elf(Elf64_Ehdr* elf_hdr) {
+  if (!elf_hdr)
+    return -1;
 
   // typedef struct
   // {
@@ -30,9 +30,6 @@ void read_elf(void* addr, int size) {
   //   Elf64_Half        e_shnum;                /* Section header table entry count */
   //   Elf64_Half        e_shstrndx;                /* Section header string table index */
   // } Elf64_Ehdr;
-
-  Elf64_Ehdr* elf_hdr;
-  elf_hdr = (Elf64_Ehdr*) addr;
 
   fprintf(stderr, "e_ident:     %.*s \n", EI_NIDENT, elf_hdr->e_ident);
   fprintf(stderr, "e_type:      %hx  \n", elf_hdr->e_type);
@@ -65,7 +62,7 @@ void read_elf(void* addr, int size) {
 
   for (int i = 0; i < elf_hdr->e_phnum; ++i) {
     Elf64_Phdr* elf_phdr;
-    elf_phdr = (Elf64_Phdr*) (addr + elf_hdr->e_phoff + i * sizeof(Elf64_Phdr));
+    elf_phdr = (Elf64_Phdr*) ((void*) elf_hdr + elf_hdr->e_phoff + i * sizeof(Elf64_Phdr));
 
     fprintf(stderr, " \n");
     fprintf(stderr, "p_type:      %x   \n", elf_phdr->p_type);
@@ -96,9 +93,10 @@ void read_elf(void* addr, int size) {
 
   for (int i = 0; i < elf_hdr->e_shnum; ++i) {
     Elf64_Shdr* elf_shdr;
-    elf_shdr = (Elf64_Shdr*) (addr + elf_hdr->e_shoff + i * sizeof(Elf64_Shdr));
+    elf_shdr = (Elf64_Shdr*) ((void*) elf_hdr + elf_hdr->e_shoff + i * sizeof(Elf64_Shdr));
 
     fprintf(stderr, " \n");
+    fprintf(stderr, "index:       %x   \n", i);
     fprintf(stderr, "sh_name:     %x   \n", elf_shdr->sh_name);
     fprintf(stderr, "sh_type:     %x   \n", elf_shdr->sh_type);
     fprintf(stderr, "sh_flags:    %lx  \n", elf_shdr->sh_flags);
@@ -109,7 +107,62 @@ void read_elf(void* addr, int size) {
     fprintf(stderr, "sh_info:     %x   \n", elf_shdr->sh_info);
     fprintf(stderr, "sh_addralign:%lx  \n", elf_shdr->sh_addralign);
     fprintf(stderr, "sh_entsize:  %lx  \n", elf_shdr->sh_entsize);
+
+    if (elf_shdr->sh_type == SHT_STRTAB) {
+      fprintf(stderr, "type:  %s   \n", "SHT_STRTAB");
+
+      char* name = (((char*) elf_hdr) + elf_shdr->sh_offset);
+      for (unsigned long i = 0; i < elf_shdr->sh_size;) {
+        fprintf(stderr, "  name:  %lx '%s'   \n", i, name + i);
+        i += 1 + strlen(&name[i]);
+      }
+    } else if (elf_shdr->sh_type == SHT_SYMTAB) {
+      fprintf(stderr, "type:  %s   \n", "SHT_SYMTAB");
+
+      for (unsigned long i = 0; i < elf_shdr->sh_size; i += sizeof(Elf64_Sym)) {
+        Elf64_Sym* symtab = (Elf64_Sym*) (((char*) elf_hdr) + elf_shdr->sh_offset + i);
+        fprintf(stderr, " \n");
+        fprintf(stderr, "  st_name:     %x   \n", symtab->st_name);
+        fprintf(stderr, "  st_info:     %hhx \n", symtab->st_info);
+        fprintf(stderr, "  st_other:    %hhx \n", symtab->st_other);
+        fprintf(stderr, "  st_shndx:    %hx  \n", symtab->st_shndx);
+        fprintf(stderr, "  st_value:    %lx  \n", symtab->st_value);
+        fprintf(stderr, "  st_size:     %lx  \n", symtab->st_size);
+      }
+    }
   }
+
+  return 0;
+}
+
+Elf64_Addr lookup_symbol(Elf64_Ehdr* elf_hdr, const char *symname) {
+  unsigned int offset = 0;
+  for (unsigned long i = 0; i < elf_hdr->e_shnum; ++i) {
+    Elf64_Shdr* elf_shdr = (Elf64_Shdr*) ((void*) elf_hdr + elf_hdr->e_shoff + i * sizeof(Elf64_Shdr));
+    if (elf_shdr->sh_type == SHT_STRTAB) {
+      char* name = (((char*) elf_hdr) + elf_shdr->sh_offset);
+      for (unsigned long j = 0; i < elf_shdr->sh_size;) {
+        fprintf(stderr, "name:  %lx '%s'   \n", j, name + j);
+        if(strcmp(&name[j], symname) == 0) {
+          offset = j;
+        }
+        j += 1 + strlen(&name[j]);
+      }
+    }
+  }
+
+  for (unsigned long i = 0; i < elf_hdr->e_shnum; ++i) {
+    Elf64_Shdr* elf_shdr = (Elf64_Shdr*) ((void*) elf_hdr + elf_hdr->e_shoff + i * sizeof(Elf64_Shdr));
+    if (elf_shdr->sh_type == SHT_SYMTAB) {
+      for (unsigned long i = 0; i < elf_shdr->sh_size; i += sizeof(Elf64_Sym)) {
+        Elf64_Sym* symtab = (Elf64_Sym*) (((char*) elf_hdr) + elf_shdr->sh_offset + i);
+        if (symtab->st_name == offset) {
+          return symtab->st_value;
+        }
+      }
+    }
+  }
+  return 0;
 }
 
 int main(int argc, char ** argv/*, char** envp*/) {
@@ -137,7 +190,12 @@ int main(int argc, char ** argv/*, char** envp*/) {
     exit(-1);
   }
 
-  read_elf(addr, st.st_size);
+  Elf64_Ehdr* elf = (Elf64_Ehdr*) addr;
+  if (print_elf(elf)) {
+    perror("read_elf");
+  } else {
+    ;
+  }
 
   munmap(addr, st.st_size);
   close(fd);
