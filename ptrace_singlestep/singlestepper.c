@@ -77,20 +77,18 @@ int ptrace_instruction_pointer(int pid, struct user_info *info) {
   unsigned char opcode = ins & 0xFF;
   ins_copy >>= 8;
 
-  DEBUG_STEPPER(stderr, "INS:  %16lx \n", ins);
+  DEBUG_STEPPER("INS:  %16lx \n", ins);
 
   if (opcode == 0xE8) {
     int ptr_offset = ins_copy & 0xFFFFFFFF;
     long ptr = info->regs.rip + ptr_offset + sizeof(opcode) + sizeof(ptr_offset);
-    /*
-    DEBUG_STEPPER(stderr, "  %hhx CALL   ptr: %x %lx \n", opcode, ptr_offset, ptr);
-    DEBUG_STEPPER(stderr, "arg1 rdi: %llx \n", info->regs.rdi);
-    DEBUG_STEPPER(stderr, "arg2 rsi: %llx \n", info->regs.rsi);
-    DEBUG_STEPPER(stderr, "arg3 rdx: %llx \n", info->regs.rdx);
-    DEBUG_STEPPER(stderr, "arg4 rcx: %llx \n", info->regs.rcx);
-    DEBUG_STEPPER(stderr, "arg5  r8: %llx \n", info->regs.r8);
-    DEBUG_STEPPER(stderr, "arg6  r9: %llx \n", info->regs.r9);
-    */
+    DEBUG_STEPPER("  %hhx CALL   ptr: %x %lx \n", opcode, ptr_offset, ptr);
+    DEBUG_STEPPER("arg1 rdi: %llx \n", info->regs.rdi);
+    DEBUG_STEPPER("arg2 rsi: %llx \n", info->regs.rsi);
+    DEBUG_STEPPER("arg3 rdx: %llx \n", info->regs.rdx);
+    DEBUG_STEPPER("arg4 rcx: %llx \n", info->regs.rcx);
+    DEBUG_STEPPER("arg5  r8: %llx \n", info->regs.r8);
+    DEBUG_STEPPER("arg6  r9: %llx \n", info->regs.r9);
 
     if ((ptr & 0xFFF) == info->func_call.addr_b) {
       if (!info->func_call.rbp_b) {
@@ -110,8 +108,8 @@ int ptrace_instruction_pointer(int pid, struct user_info *info) {
     }
     */
   } else if (opcode == 0xC3) {
-    DEBUG_STEPPER(stderr, "  %hhx RET \n", opcode);
-    DEBUG_STEPPER(stderr, "ret rax: %llx \n", info->regs.rax);
+    DEBUG_STEPPER("  %hhx RET \n", opcode);
+    DEBUG_STEPPER("ret rax: %llx \n", info->regs.rax);
     if (info->func_call.rbp_b && info->func_call.rbp_b == info->regs.rbp) {
       info->func_call.rbp_b = 0;
       if (info->func_call.callback_b) {
@@ -119,11 +117,11 @@ int ptrace_instruction_pointer(int pid, struct user_info *info) {
       }
     }
   } else {
-    // DEBUG_STEPPER(stderr, "opcр: %16hhx \n", opcode);
+    // DEBUG_STEPPER("opcр: %16hhx \n", opcode);
     info->last_error = -1;
   }
 
-  // print_info(stderr, info);
+  print_info(stderr, info);
 
   return 0;
 }
