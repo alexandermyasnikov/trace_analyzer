@@ -8,42 +8,30 @@
 #include <errno.h>
 #include <sys/user.h>
 #include <stdint.h>
+#include <dlfcn.h>
+#include "../elf/elf_utils.h"
+
+#define DEBUG_STEPPER(a...) // { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
+
+typedef void (*callback_t)(struct user_regs_struct*);
+
+struct func_call_t {
+  const char* filename;       // Имя динамической библиотеки, содержащее новую функцию.
+  const char* funcname_b;     // Имя перехватыемой функции.
+  unsigned long long rbp_b;   // Для определения сответствующей RET инструкции.
+  Elf64_Addr addr_b;          // Адрес перехватываемой функции.
+  callback_t callback_b;      // Указатель на новую функцию.
+};
 
 struct user_info {
   struct user_regs_struct regs;
   int last_error;
+  struct func_call_t func_call;
 };
 
+int inject_data(pid_t pid, unsigned char *src, void *dst, int len);
+
 void print_info(FILE *stream, struct user_info* info) {
-  /*
-  __extension__ unsigned long long int r15;
-  __extension__ unsigned long long int r14;
-  __extension__ unsigned long long int r13;
-  __extension__ unsigned long long int r12;
-  __extension__ unsigned long long int rbp;
-  __extension__ unsigned long long int rbx;
-  __extension__ unsigned long long int r11;
-  __extension__ unsigned long long int r10;
-  __extension__ unsigned long long int r9;
-  __extension__ unsigned long long int r8;
-  __extension__ unsigned long long int rax;
-  __extension__ unsigned long long int rcx;
-  __extension__ unsigned long long int rdx;
-  __extension__ unsigned long long int rsi;
-  __extension__ unsigned long long int rdi;
-  __extension__ unsigned long long int orig_rax;
-  __extension__ unsigned long long int rip;
-  __extension__ unsigned long long int cs;
-  __extension__ unsigned long long int eflags;
-  __extension__ unsigned long long int rsp;
-  __extension__ unsigned long long int ss;
-  __extension__ unsigned long long int fs_base;
-  __extension__ unsigned long long int gs_base;
-  __extension__ unsigned long long int ds;
-  __extension__ unsigned long long int es;
-  __extension__ unsigned long long int fs;
-  __extension__ unsigned long long int gs;
-  */
   fprintf(stream, "rbp:  %16llx \n", info->regs.rbp);
   fprintf(stream, "rsp:  %16llx \n", info->regs.rsp);
   fprintf(stream, "rip:  %16llx \n", info->regs.rip);
@@ -89,28 +77,49 @@ int ptrace_instruction_pointer(int pid, struct user_info *info) {
   unsigned char opcode = ins & 0xFF;
   ins_copy >>= 8;
 
-  fprintf(stderr, "INS:  %16lx \n", ins);
+  DEBUG_STEPPER(stderr, "INS:  %16lx \n", ins);
 
   if (opcode == 0xE8) {
     int ptr_offset = ins_copy & 0xFFFFFFFF;
     long ptr = info->regs.rip + ptr_offset + sizeof(opcode) + sizeof(ptr_offset);
-    fprintf(stderr, "  %hhx CALL   ptr: %x %lx \n", opcode, ptr_offset, ptr);
-    fprintf(stderr, "arg1 rdi: %llx \n", info->regs.rdi);
-    fprintf(stderr, "arg2 rsi: %llx \n", info->regs.rsi);
-    fprintf(stderr, "arg3 rdx: %llx \n", info->regs.rdx);
-    fprintf(stderr, "arg4 rcx: %llx \n", info->regs.rcx);
-    fprintf(stderr, "arg5  r8: %llx \n", info->regs.r8);
-    fprintf(stderr, "arg6  r9: %llx \n", info->regs.r9);
+    /*
+    DEBUG_STEPPER(stderr, "  %hhx CALL   ptr: %x %lx \n", opcode, ptr_offset, ptr);
+    DEBUG_STEPPER(stderr, "arg1 rdi: %llx \n", info->regs.rdi);
+    DEBUG_STEPPER(stderr, "arg2 rsi: %llx \n", info->regs.rsi);
+    DEBUG_STEPPER(stderr, "arg3 rdx: %llx \n", info->regs.rdx);
+    DEBUG_STEPPER(stderr, "arg4 rcx: %llx \n", info->regs.rcx);
+    DEBUG_STEPPER(stderr, "arg5  r8: %llx \n", info->regs.r8);
+    DEBUG_STEPPER(stderr, "arg6  r9: %llx \n", info->regs.r9);
+    */
 
-    if ((ptr & 0xFFF) == 0x695) { // HACK
+    if ((ptr & 0xFFF) == info->func_call.addr_b) {
+      if (!info->func_call.rbp_b) {
+        info->func_call.rbp_b = info->regs.rbp;
+        if (info->func_call.callback_b) {
+          ((callback_t) info->func_call.callback_b)(&info->regs);
+        }
+      } else {
+        fprintf(stderr, "  ERROR: nested call \n");
+      }
+    }
+
+    /*
+    if ((ptr & 0xFFF) == info->addr1) { // HACK
       info->regs.rdi = -info->regs.rdi;
       ptrace(PTRACE_SETREGS, pid, NULL, &info->regs);
     }
+    */
   } else if (opcode == 0xC3) {
-    fprintf(stderr, "  %hhx RET \n", opcode);
-    fprintf(stderr, "ret rax: %llx \n", info->regs.rax);
+    DEBUG_STEPPER(stderr, "  %hhx RET \n", opcode);
+    DEBUG_STEPPER(stderr, "ret rax: %llx \n", info->regs.rax);
+    if (info->func_call.rbp_b && info->func_call.rbp_b == info->regs.rbp) {
+      info->func_call.rbp_b = 0;
+      if (info->func_call.callback_b) {
+        // ((callback_t) info->func_call.callback_b)(&info->regs);
+      }
+    }
   } else {
-    fprintf(stderr, "opcр: %16hhx \n", opcode);
+    // DEBUG_STEPPER(stderr, "opcр: %16hhx \n", opcode);
     info->last_error = -1;
   }
 
@@ -129,8 +138,79 @@ int singlestep(int pid) {
   return status;
 }
 
+struct context_symbols_t {
+  int fd;
+  off_t st_size;
+  Elf64_Ehdr* elf;
+};
+
+int context_symbols_init(struct context_symbols_t* context, const char* filename) {
+  return open_elf(filename, &context->fd, &context->st_size, &context->elf);
+}
+
+int context_symbols_lookup(struct context_symbols_t* context, const char* funcname, Elf64_Addr* addr) {
+  *addr = lookup_symbol(context->elf, funcname);
+  return addr == 0;
+}
+
+int context_symbols_destroy(struct context_symbols_t* context) {
+  return close_elf(&context->fd, &context->st_size, &context->elf);
+}
+
+
+
+struct context_dl_t {
+  void* handle;
+};
+
+int context_dl_init(struct context_dl_t* context, const char* filename) {
+  context->handle = dlopen(filename, RTLD_NOW);
+  return (!context->handle);
+}
+
+int context_dl_sym(struct context_dl_t* context, const char* funcname, void** callback) {
+  void* fn = dlsym(context->handle, funcname);
+  *callback = fn;
+  return dlerror() != NULL;
+}
+
+int context_dl_destroy(struct context_dl_t* context) {
+  return dlclose(context->handle);
+}
+
+
+
 int main(int argc, char ** argv, char **envp) {
     struct user_info info;
+
+    info.func_call.filename = "./sample/callbacks.so";
+    info.func_call.funcname_b = "sum";
+    info.func_call.rbp_b = 0;
+    info.func_call.addr_b = 0;
+    info.func_call.callback_b = NULL;
+
+    {
+      struct context_symbols_t context_symbols;
+      context_symbols_init(&context_symbols, argv[1]);
+
+      Elf64_Addr addr;
+      context_symbols_lookup(&context_symbols, info.func_call.funcname_b, &addr);
+      fprintf(stderr, "name: %s   addr: %llx \n", info.func_call.funcname_b, addr);
+      info.func_call.addr_b = addr;
+
+      context_symbols_destroy(&context_symbols);
+    }
+
+    {
+      struct context_dl_t context_dl;
+      context_dl_init(&context_dl, info.func_call.filename);
+      context_dl_sym(&context_dl, info.func_call.funcname_b, (void**) &info.func_call.callback_b);
+      fprintf(stderr, "name2: %s   addr: %llx \n", info.func_call.funcname_b, info.func_call.callback_b);
+      // context_dl_destroy(&context_dl);
+    }
+
+
+
     pid_t pid;
     int status;
     char *program;
@@ -168,6 +248,22 @@ int main(int argc, char ** argv, char **envp) {
         ptrace(PTRACE_DETACH, pid, 0, 0);
     }
 
+
     return 0;
+}
+
+int inject_data(pid_t pid, unsigned char *src, void *dst, int len)
+{
+  int      i;
+  long long *s = (long long *) src;
+  long long *d = (long long *) dst;
+
+  for (i = 0; i < len; i += sizeof(long long), s++, d++) {
+    if ((ptrace (PTRACE_POKETEXT, pid, d, *s)) < 0) {
+      perror ("ptrace(POKETEXT)");
+      return -1;
+    }
+  }
+  return 0;
 }
 
