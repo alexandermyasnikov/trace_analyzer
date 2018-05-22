@@ -13,14 +13,26 @@
 
 #define DEBUG_STEPPER(a...) // { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 
+#define ALARM_TIMEOUT_SEC   60
+#define LOCK_FILE_NAME      "LOCK"
+
+
+
+volatile int break_flag = 0;
+
+
+
 typedef void (*callback_t)(struct user_regs_struct*);
 
 struct func_call_t {
-  const char* filename;       // Имя динамической библиотеки, содержащее новую функцию.
-  const char* funcname_b;     // Имя перехватыемой функции.
-  unsigned long long rbp_b;   // Для определения сответствующей RET инструкции.
-  Elf64_Addr addr_b;          // Адрес перехватываемой функции.
-  callback_t callback_b;      // Указатель на новую функцию.
+  const char* callbacks_shared;   // Имя динамической библиотеки, содержащее новую функцию.
+  const char* func_name;          // Имя перехватыемой функции.
+  Elf64_Addr func_addr;           // Адрес перехватываемой функции.
+  unsigned long long rbp_call;    // Для определения сответствующей RET инструкции.
+  const char* func_call_name;     // Имя новой функции для CALL инструкции.
+  const char* func_ret_name;      // Имя новой функции для RET инструкции.
+  callback_t callback_call;       // Указатель на новую функцию с именем func_call_name.
+  callback_t callback_ret;        // Указатель на новую функцию с именем func_ret_name.
 };
 
 struct user_info {
@@ -90,11 +102,12 @@ int ptrace_instruction_pointer(int pid, struct user_info *info) {
     DEBUG_STEPPER("arg5  r8: %llx \n", info->regs.r8);
     DEBUG_STEPPER("arg6  r9: %llx \n", info->regs.r9);
 
-    if ((ptr & 0xFFF) == info->func_call.addr_b) {
-      if (!info->func_call.rbp_b) {
-        info->func_call.rbp_b = info->regs.rbp;
-        if (info->func_call.callback_b) {
-          ((callback_t) info->func_call.callback_b)(&info->regs);
+    if ((ptr & 0xFFF) == info->func_call.func_addr) { // TODO
+      printf("  %hhx CALL   ptr: %x %lx \n", opcode, ptr_offset, ptr);
+      if (!info->func_call.rbp_call) {
+        info->func_call.rbp_call = info->regs.rbp;
+        if (info->func_call.callback_call) {
+          ((callback_t) info->func_call.callback_call)(&info->regs);
         }
       } else {
         fprintf(stderr, "  ERROR: nested call \n");
@@ -110,10 +123,10 @@ int ptrace_instruction_pointer(int pid, struct user_info *info) {
   } else if (opcode == 0xC3) {
     DEBUG_STEPPER("  %hhx RET \n", opcode);
     DEBUG_STEPPER("ret rax: %llx \n", info->regs.rax);
-    if (info->func_call.rbp_b && info->func_call.rbp_b == info->regs.rbp) {
-      info->func_call.rbp_b = 0;
-      if (info->func_call.callback_b) {
-        // ((callback_t) info->func_call.callback_b)(&info->regs);
+    if (info->func_call.rbp_call && info->func_call.rbp_call == info->regs.rbp) {
+      info->func_call.rbp_call = 0;
+      if (info->func_call.callback_ret) {
+        ((callback_t) info->func_call.callback_ret)(&info->regs);
       }
     }
   } else {
@@ -142,8 +155,8 @@ struct context_symbols_t {
   Elf64_Ehdr* elf;
 };
 
-int context_symbols_init(struct context_symbols_t* context, const char* filename) {
-  return open_elf(filename, &context->fd, &context->st_size, &context->elf);
+int context_symbols_init(struct context_symbols_t* context, const char* callbacks_shared) {
+  return open_elf(callbacks_shared, &context->fd, &context->st_size, &context->elf);
 }
 
 int context_symbols_lookup(struct context_symbols_t* context, const char* funcname, Elf64_Addr* addr) {
@@ -161,8 +174,8 @@ struct context_dl_t {
   void* handle;
 };
 
-int context_dl_init(struct context_dl_t* context, const char* filename) {
-  context->handle = dlopen(filename, RTLD_NOW);
+int context_dl_init(struct context_dl_t* context, const char* callbacks_shared) {
+  context->handle = dlopen(callbacks_shared, RTLD_NOW);
   return (!context->handle);
 }
 
@@ -176,7 +189,12 @@ int context_dl_destroy(struct context_dl_t* context) {
   return dlclose(context->handle);
 }
 
-
+void ALARMhandler(__attribute__ ((unused)) int sig) {
+  if (access(LOCK_FILE_NAME, F_OK) != 0) { // file doesn't exist
+    break_flag = 1;
+  }
+  alarm(ALARM_TIMEOUT_SEC);
+}
 
 int main(int argc, char ** argv/*, char **envp*/) {
     struct user_info info;
@@ -188,31 +206,37 @@ int main(int argc, char ** argv/*, char **envp*/) {
         exit(-1);
     }
 
-
-
-    info.func_call.filename = "./sample/callbacks.so";
-    info.func_call.funcname_b = "sum";
-    info.func_call.rbp_b = 0;
-    info.func_call.addr_b = 0;
-    info.func_call.callback_b = NULL;
+    info.func_call.callbacks_shared = "./sample/callbacks.so";
+    info.func_call.func_name = "sum";
+    info.func_call.func_addr = 0;
+    info.func_call.rbp_call = 0;
+    info.func_call.func_call_name = "sum_call";
+    info.func_call.func_ret_name = "sum_ret";
+    info.func_call.callback_call = NULL;
+    info.func_call.callback_ret = NULL;
 
     {
       struct context_symbols_t context_symbols;
       context_symbols_init(&context_symbols, argv[1]);
 
       Elf64_Addr addr;
-      context_symbols_lookup(&context_symbols, info.func_call.funcname_b, &addr);
-      fprintf(stderr, "name: %s   addr: %lx \n", info.func_call.funcname_b, addr);
-      info.func_call.addr_b = addr;
+      context_symbols_lookup(&context_symbols, info.func_call.func_name, &addr);
+      fprintf(stderr, "func_name: %s   addr: %lx \n", info.func_call.func_name, addr);
+      info.func_call.func_addr = addr;
 
       context_symbols_destroy(&context_symbols);
     }
 
     {
       struct context_dl_t context_dl;
-      context_dl_init(&context_dl, info.func_call.filename);
-      context_dl_sym(&context_dl, info.func_call.funcname_b, (void**) &info.func_call.callback_b);
-      fprintf(stderr, "name2: %s   addr: %px \n", info.func_call.funcname_b, (void *) info.func_call.callback_b);
+      context_dl_init(&context_dl, info.func_call.callbacks_shared);
+      context_dl_sym(&context_dl, info.func_call.func_call_name, (void**) &info.func_call.callback_call);
+      fprintf(stderr, "func_call: %s   addr: %p \n", info.func_call.func_call_name,
+              (void *) info.func_call.callback_call);
+      context_dl_sym(&context_dl, info.func_call.func_ret_name, (void**) &info.func_call.callback_ret);
+      fprintf(stderr, "func_ret: %s   addr: %p \n", info.func_call.func_ret_name,
+              (void *) info.func_call.callback_call);
+
       // context_dl_destroy(&context_dl);
     }
 
@@ -220,26 +244,28 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
     pid = atoi(argv[2]);
 
+    alarm(1);
+    signal(SIGALRM, ALARMhandler);
+
     ptrace(PTRACE_ATTACH, pid, NULL, NULL);
     waitpid(pid, &status, 0);
     fprint_wait_status(stderr, status);
-    while (WIFSTOPPED(status)) {
+    while (WIFSTOPPED(status) && !break_flag) {
       if (ptrace_instruction_pointer(pid, &info)) {
         break;
       }
       status = singlestep(pid);
     }
     fprint_wait_status(stderr, status);
-    fprintf(stderr, "Detaching\n");
-    ptrace(PTRACE_DETACH, pid, NULL, NULL); // TODO
+    fprintf(stderr, "Detaching \n");
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
 
 
 
     return 0;
 }
 
-int inject_data(pid_t pid, unsigned char *src, void *dst, int len)
-{
+int inject_data(pid_t pid, unsigned char *src, void *dst, int len) {
   int      i;
   long long *s = (long long *) src;
   long long *d = (long long *) dst;
