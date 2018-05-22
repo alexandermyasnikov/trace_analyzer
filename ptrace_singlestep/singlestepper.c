@@ -121,7 +121,7 @@ int ptrace_instruction_pointer(int pid, struct user_info *info) {
     info->last_error = -1;
   }
 
-  print_info(stderr, info);
+  // print_info(stderr, info);
 
   return 0;
 }
@@ -178,8 +178,17 @@ int context_dl_destroy(struct context_dl_t* context) {
 
 
 
-int main(int argc, char ** argv, char **envp) {
+int main(int argc, char ** argv/*, char **envp*/) {
     struct user_info info;
+    pid_t pid;
+    int status;
+
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s elffile pid \n", argv[0]);
+        exit(-1);
+    }
+
+
 
     info.func_call.filename = "./sample/callbacks.so";
     info.func_call.funcname_b = "sum";
@@ -193,7 +202,7 @@ int main(int argc, char ** argv, char **envp) {
 
       Elf64_Addr addr;
       context_symbols_lookup(&context_symbols, info.func_call.funcname_b, &addr);
-      fprintf(stderr, "name: %s   addr: %llx \n", info.func_call.funcname_b, addr);
+      fprintf(stderr, "name: %s   addr: %lx \n", info.func_call.funcname_b, addr);
       info.func_call.addr_b = addr;
 
       context_symbols_destroy(&context_symbols);
@@ -203,48 +212,27 @@ int main(int argc, char ** argv, char **envp) {
       struct context_dl_t context_dl;
       context_dl_init(&context_dl, info.func_call.filename);
       context_dl_sym(&context_dl, info.func_call.funcname_b, (void**) &info.func_call.callback_b);
-      fprintf(stderr, "name2: %s   addr: %llx \n", info.func_call.funcname_b, info.func_call.callback_b);
+      fprintf(stderr, "name2: %s   addr: %px \n", info.func_call.funcname_b, (void *) info.func_call.callback_b);
       // context_dl_destroy(&context_dl);
     }
 
 
 
-    pid_t pid;
-    int status;
-    char *program;
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s elffile arg0 arg1 ...\n", argv[0]);
-        exit(-1);
-    }
-    program = argv[1];
-    char ** child_args = (char**) &argv[1];
+    pid = atoi(argv[2]);
 
-    pid = fork();
-    if (pid == -1) {
-        fprintf(stderr, "Error forking: %s\n", strerror(errno));
-        exit(-1);
+    ptrace(PTRACE_ATTACH, pid, NULL, NULL);
+    waitpid(pid, &status, 0);
+    fprint_wait_status(stderr, status);
+    while (WIFSTOPPED(status)) {
+      if (ptrace_instruction_pointer(pid, &info)) {
+        break;
+      }
+      status = singlestep(pid);
     }
-    if (pid == 0) {
-        /* child */
-        if (ptrace(PTRACE_TRACEME, 0, 0, 0)) {
-            fprintf(stderr, "Error setting TRACEME: %s\n", strerror(errno));
-            exit(-1);
-        }
-        execve(program,child_args,envp);
-    } else {
-        /* parent */
-        waitpid(pid, &status, 0);
-        fprint_wait_status(stderr, status);
-        while (WIFSTOPPED(status)) {
-            if (ptrace_instruction_pointer(pid, &info)) {
-                break;
-            }
-            status = singlestep(pid);
-        }
-        fprint_wait_status(stderr, status);
-        fprintf(stderr, "Detaching\n");
-        ptrace(PTRACE_DETACH, pid, 0, 0);
-    }
+    fprint_wait_status(stderr, status);
+    fprintf(stderr, "Detaching\n");
+    ptrace(PTRACE_DETACH, pid, NULL, NULL); // TODO
+
 
 
     return 0;
