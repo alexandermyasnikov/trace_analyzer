@@ -15,6 +15,7 @@
 
 #define ALARM_TIMEOUT_SEC   60
 #define LOCK_FILE_NAME      "LOCK"
+#define PROCESS_MAX_COUNT   10
 
 
 
@@ -207,17 +208,13 @@ int trace_info_init(struct trace_info_t* context) {
 
 int trace_info_step(struct trace_info_t* context) {
   if (WIFSTOPPED(context->status) && !break_flag) {
-    if (WIFSTOPPED(context->status) && WSTOPSIG(context->status) & 0x80) {
-      fprintf(stderr, "syscall %x \n", context->status);
-    }
     if (WSTOPSIG(context->status) == SIGTRAP) {
       int event = (context->status >> 16) & 0xffff;
       if (event) {
         fprintf(stderr, "event %x \n", event);
         long newpid;
         ptrace(PTRACE_GETEVENTMSG, context->pid, NULL, (long) &newpid);
-        fprintf(stderr, "newpid %ld %lx \n", newpid, newpid);
-
+        fprintf(stderr, "newpid %ld \n", newpid);
         waitpid(newpid, &context->status, 0);
         // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
         ptrace(PTRACE_DETACH, newpid, NULL, NULL);
@@ -237,6 +234,39 @@ int trace_info_destroy(struct trace_info_t* context) {
   fprint_wait_status(stderr, context->status);
   fprintf(stderr, "Detaching \n");
   ptrace(PTRACE_DETACH, context->pid, NULL, NULL);
+  return 0;
+}
+
+
+
+struct trace_manager_t {
+  struct trace_info_t processes[PROCESS_MAX_COUNT];
+};
+
+int trace_manager_init(struct trace_manager_t* context) {
+  memset(&context->processes, 0, sizeof(context->processes));
+  return 0;
+}
+
+int trace_manager_step(struct trace_manager_t* context) {
+  int is_end = 1;
+  for (int i = 0; i < PROCESS_MAX_COUNT; ++i) {
+    if (context->processes[i].pid == 0)
+      continue;
+
+    if (trace_info_step(&context->processes[i])) {
+      context->processes[i].pid = 0;
+      continue;
+    }
+
+    is_end = 0;
+  }
+
+  return is_end;
+}
+
+int trace_manager_destroy(__attribute__ ((unused)) struct trace_manager_t* context) {
+  fprintf(stderr, "END \n");
   return 0;
 }
 
@@ -297,14 +327,14 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
 
     {
-      struct trace_info_t trace_info;
-      trace_info.pid = atoi(argv[2]);
-      trace_info.info = info;
-
-      trace_info_init(&trace_info);
-      while (!trace_info_step(&trace_info))
+      struct trace_manager_t manager;
+      trace_manager_init(&manager);
+      manager.processes[0].pid = atoi(argv[2]);
+      manager.processes[0].info = info;
+      trace_info_init(&manager.processes[0]);
+      while (!trace_manager_step(&manager))
         ;
-      trace_info_destroy(&trace_info);
+      trace_manager_destroy(&manager);
     }
 
 
