@@ -189,6 +189,59 @@ int context_dl_destroy(struct context_dl_t* context) {
   return dlclose(context->handle);
 }
 
+
+
+struct trace_info_t {
+  struct user_info info;
+  pid_t pid;
+  int status;
+};
+
+int trace_info_init(struct trace_info_t* context) {
+  ptrace(PTRACE_ATTACH, context->pid, NULL, NULL);
+  waitpid(context->pid, &context->status, 0);
+  ptrace(PTRACE_SETOPTIONS, context->pid, NULL, PTRACE_O_TRACEFORK | PTRACE_O_TRACESYSGOOD);
+  fprint_wait_status(stderr, context->status);
+  return 0;
+}
+
+int trace_info_step(struct trace_info_t* context) {
+  if (WIFSTOPPED(context->status) && !break_flag) {
+    if (WIFSTOPPED(context->status) && WSTOPSIG(context->status) & 0x80) {
+      fprintf(stderr, "syscall %x \n", context->status);
+    }
+    if (WSTOPSIG(context->status) == SIGTRAP) {
+      int event = (context->status >> 16) & 0xffff;
+      if (event) {
+        fprintf(stderr, "event %x \n", event);
+        long newpid;
+        ptrace(PTRACE_GETEVENTMSG, context->pid, NULL, (long) &newpid);
+        fprintf(stderr, "newpid %ld %lx \n", newpid, newpid);
+
+        waitpid(newpid, &context->status, 0);
+        // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
+        ptrace(PTRACE_DETACH, newpid, NULL, NULL);
+      }
+    }
+    if (ptrace_instruction_pointer(context->pid, &context->info)) {
+      return -1;
+    }
+    context->status = singlestep(context->pid);
+    return 0;
+  } else {
+    return 1;
+  }
+}
+
+int trace_info_destroy(struct trace_info_t* context) {
+  fprint_wait_status(stderr, context->status);
+  fprintf(stderr, "Detaching \n");
+  ptrace(PTRACE_DETACH, context->pid, NULL, NULL);
+  return 0;
+}
+
+
+
 void ALARMhandler(__attribute__ ((unused)) int sig) {
   if (access(LOCK_FILE_NAME, F_OK) != 0) { // file doesn't exist
     break_flag = 1;
@@ -198,8 +251,9 @@ void ALARMhandler(__attribute__ ((unused)) int sig) {
 
 int main(int argc, char ** argv/*, char **envp*/) {
     struct user_info info;
-    pid_t pid;
-    int status;
+
+    alarm(1);
+    signal(SIGALRM, ALARMhandler);
 
     if (argc < 3) {
         fprintf(stderr, "Usage: %s elffile pid \n", argv[0]);
@@ -242,23 +296,16 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
 
 
-    pid = atoi(argv[2]);
+    {
+      struct trace_info_t trace_info;
+      trace_info.pid = atoi(argv[2]);
+      trace_info.info = info;
 
-    alarm(1);
-    signal(SIGALRM, ALARMhandler);
-
-    ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-    waitpid(pid, &status, 0);
-    fprint_wait_status(stderr, status);
-    while (WIFSTOPPED(status) && !break_flag) {
-      if (ptrace_instruction_pointer(pid, &info)) {
-        break;
-      }
-      status = singlestep(pid);
+      trace_info_init(&trace_info);
+      while (!trace_info_step(&trace_info))
+        ;
+      trace_info_destroy(&trace_info);
     }
-    fprint_wait_status(stderr, status);
-    fprintf(stderr, "Detaching \n");
-    ptrace(PTRACE_DETACH, pid, NULL, NULL);
 
 
 
