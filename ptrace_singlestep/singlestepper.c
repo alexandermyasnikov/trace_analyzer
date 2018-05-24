@@ -192,13 +192,16 @@ int context_dl_destroy(struct context_dl_t* context) {
 
 
 
+struct trace_manager_t;
 struct trace_info_t {
+  struct trace_manager_t* manager;
   struct user_info info;
   pid_t pid;
   int status;
 };
 
-int trace_info_init(struct trace_info_t* context) {
+int trace_info_init(struct trace_info_t* context, pid_t pid) {
+  context->pid = pid;
   ptrace(PTRACE_ATTACH, context->pid, NULL, NULL);
   waitpid(context->pid, &context->status, 0);
   ptrace(PTRACE_SETOPTIONS, context->pid, NULL, PTRACE_O_TRACEFORK | PTRACE_O_TRACESYSGOOD);
@@ -206,34 +209,13 @@ int trace_info_init(struct trace_info_t* context) {
   return 0;
 }
 
-int trace_info_step(struct trace_info_t* context) {
-  if (WIFSTOPPED(context->status) && !break_flag) {
-    if (WSTOPSIG(context->status) == SIGTRAP) {
-      int event = (context->status >> 16) & 0xffff;
-      if (event) {
-        fprintf(stderr, "event %x \n", event);
-        long newpid;
-        ptrace(PTRACE_GETEVENTMSG, context->pid, NULL, (long) &newpid);
-        fprintf(stderr, "newpid %ld \n", newpid);
-        waitpid(newpid, &context->status, 0);
-        // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
-        ptrace(PTRACE_DETACH, newpid, NULL, NULL);
-      }
-    }
-    if (ptrace_instruction_pointer(context->pid, &context->info)) {
-      return -1;
-    }
-    context->status = singlestep(context->pid);
-    return 0;
-  } else {
-    return 1;
-  }
-}
+int trace_info_step(struct trace_info_t* context);
 
 int trace_info_destroy(struct trace_info_t* context) {
   fprint_wait_status(stderr, context->status);
   fprintf(stderr, "Detaching \n");
   ptrace(PTRACE_DETACH, context->pid, NULL, NULL);
+  context->pid = 0;
   return 0;
 }
 
@@ -248,14 +230,22 @@ int trace_manager_init(struct trace_manager_t* context) {
   return 0;
 }
 
+int trace_manager_next_processes_id(struct trace_manager_t* context) {
+  for (int i = 0; i < PROCESS_MAX_COUNT; ++i) {
+    if (!context->processes[i].pid)
+      return i;
+  }
+  return -1;
+}
+
 int trace_manager_step(struct trace_manager_t* context) {
   int is_end = 1;
   for (int i = 0; i < PROCESS_MAX_COUNT; ++i) {
-    if (context->processes[i].pid == 0)
+    if (!context->processes[i].pid)
       continue;
 
     if (trace_info_step(&context->processes[i])) {
-      context->processes[i].pid = 0;
+      trace_info_destroy(&context->processes[i]);
       continue;
     }
 
@@ -278,6 +268,43 @@ void ALARMhandler(__attribute__ ((unused)) int sig) {
   }
   alarm(ALARM_TIMEOUT_SEC);
 }
+
+
+
+int trace_info_step(struct trace_info_t* context) {
+  if (WIFSTOPPED(context->status) && !break_flag) {
+    if (WSTOPSIG(context->status) == SIGTRAP) {
+      int event = (context->status >> 16) & 0xffff;
+      if (event) {
+        fprintf(stderr, "event %x \n", event);
+        long newpid;
+        ptrace(PTRACE_GETEVENTMSG, context->pid, NULL, (long) &newpid);
+        fprintf(stderr, "newpid %ld \n", newpid);
+        waitpid(newpid, &context->status, 0);
+
+        // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
+        ptrace(PTRACE_DETACH, newpid, NULL, NULL); // XXX
+
+        struct trace_manager_t* manager = context->manager;
+        int id = trace_manager_next_processes_id(manager);
+        if (id != -1) {
+          manager->processes[id].info = context->info;
+          manager->processes[id].manager = context->manager;
+          trace_info_init(&manager->processes[id], newpid);
+        }
+      }
+    }
+    if (ptrace_instruction_pointer(context->pid, &context->info)) {
+      return -1;
+    }
+    context->status = singlestep(context->pid);
+    return 0;
+  } else {
+    return 1;
+  }
+}
+
+
 
 int main(int argc, char ** argv/*, char **envp*/) {
     struct user_info info;
@@ -329,9 +356,9 @@ int main(int argc, char ** argv/*, char **envp*/) {
     {
       struct trace_manager_t manager;
       trace_manager_init(&manager);
-      manager.processes[0].pid = atoi(argv[2]);
       manager.processes[0].info = info;
-      trace_info_init(&manager.processes[0]);
+      manager.processes[0].manager = &manager;
+      trace_info_init(&manager.processes[0], atoi(argv[2]));
       while (!trace_manager_step(&manager))
         ;
       trace_manager_destroy(&manager);
