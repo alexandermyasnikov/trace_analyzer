@@ -13,9 +13,10 @@
 
 #define DEBUG_STEPPER(a...) // { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 
-#define ALARM_TIMEOUT_SEC   60
-#define LOCK_FILE_NAME      "LOCK"
-#define PROCESS_MAX_COUNT   10
+#define ALARM_TIMEOUT_SEC      60
+#define LOCK_FILE_NAME         "LOCK"
+#define PROCESS_MAX_COUNT      10
+#define INSTRUCTIONS_AT_TIME   10000
 
 
 
@@ -252,6 +253,9 @@ int trace_manager_step(struct trace_manager_t* context) {
     is_end = 0;
   }
 
+  if (break_flag)
+    is_end = 1;
+
   return is_end;
 }
 
@@ -272,7 +276,9 @@ void ALARMhandler(__attribute__ ((unused)) int sig) {
 
 
 int trace_info_step(struct trace_info_t* context) {
-  if (WIFSTOPPED(context->status) && !break_flag) {
+  int k = 0;
+  int ret = 1;
+  while (WIFSTOPPED(context->status) && ++k < INSTRUCTIONS_AT_TIME) {
     if (WSTOPSIG(context->status) == SIGTRAP) {
       int event = (context->status >> 16) & 0xffff;
       if (event) {
@@ -298,10 +304,9 @@ int trace_info_step(struct trace_info_t* context) {
       return -1;
     }
     context->status = singlestep(context->pid);
-    return 0;
-  } else {
-    return 1;
+    ret = 0;
   }
+  return ret;
 }
 
 
