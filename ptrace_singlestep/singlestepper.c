@@ -212,6 +212,8 @@ int trace_info_init(struct trace_info_t* context, pid_t pid) {
 
 int trace_info_step(struct trace_info_t* context);
 
+int trace_info_check_status(struct trace_info_t* context);
+
 int trace_info_destroy(struct trace_info_t* context) {
   fprint_wait_status(stderr, context->status);
   fprintf(stderr, "Detaching \n");
@@ -279,27 +281,7 @@ int trace_info_step(struct trace_info_t* context) {
   int k = 0;
   int ret = 1;
   while (WIFSTOPPED(context->status) && ++k < INSTRUCTIONS_AT_TIME) {
-    if (WSTOPSIG(context->status) == SIGTRAP) {
-      int event = (context->status >> 16) & 0xffff;
-      if (event) {
-        fprintf(stderr, "event %x \n", event);
-        long newpid;
-        ptrace(PTRACE_GETEVENTMSG, context->pid, NULL, (long) &newpid);
-        fprintf(stderr, "newpid %ld \n", newpid);
-        waitpid(newpid, &context->status, 0);
-
-        // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
-        ptrace(PTRACE_DETACH, newpid, NULL, NULL); // XXX
-
-        struct trace_manager_t* manager = context->manager;
-        int id = trace_manager_next_processes_id(manager);
-        if (id != -1) {
-          manager->processes[id].info = context->info;
-          manager->processes[id].manager = context->manager;
-          trace_info_init(&manager->processes[id], newpid);
-        }
-      }
-    }
+    trace_info_check_status(context);
     if (ptrace_instruction_pointer(context->pid, &context->info)) {
       return -1;
     }
@@ -307,6 +289,35 @@ int trace_info_step(struct trace_info_t* context) {
     ret = 0;
   }
   return ret;
+}
+
+int trace_info_check_status(struct trace_info_t* context) {
+  if (WSTOPSIG(context->status) != SIGTRAP)
+    return 0;
+
+  int event = (context->status >> 16) & 0xFFFF;
+  if (!event)
+    return 0;
+
+  fprintf(stderr, "event %x \n", event);
+  long newpid;
+  ptrace(PTRACE_GETEVENTMSG, context->pid, NULL, (long) &newpid);
+  fprintf(stderr, "newpid %ld \n", newpid);
+  int status;
+  waitpid(newpid, &status, 0);
+
+  // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
+  ptrace(PTRACE_DETACH, newpid, NULL, NULL); // XXX
+
+  struct trace_manager_t* manager = context->manager;
+  int id = trace_manager_next_processes_id(manager);
+  if (id != -1) {
+    manager->processes[id].manager = context->manager;
+    manager->processes[id].info    = context->info;
+    manager->processes[id].status  = status;
+    trace_info_init(&manager->processes[id], newpid);
+  }
+  return 0;
 }
 
 
