@@ -37,7 +37,7 @@ struct func_call_t {
   callback_t callback_ret;        // Указатель на новую функцию с именем func_ret_name.
 };
 
-struct user_info {
+struct user_info_t {
   struct user_regs_struct regs;
   int last_error;
   struct func_call_t func_call;
@@ -45,7 +45,7 @@ struct user_info {
 
 int inject_data(pid_t pid, unsigned char *src, void *dst, int len);
 
-void print_info(FILE *stream, struct user_info* info) {
+void print_info(FILE *stream, struct user_info_t* info) {
   fprintf(stream, "rbp:  %16llx \n", info->regs.rbp);
   fprintf(stream, "rsp:  %16llx \n", info->regs.rsp);
   fprintf(stream, "rip:  %16llx \n", info->regs.rip);
@@ -74,7 +74,7 @@ void fprint_wait_status(FILE *stream, int status) {
   }
 }
 
-int ptrace_instruction_pointer(int pid, struct user_info *info) {
+int ptrace_instruction_pointer(int pid, struct user_info_t *info) {
   if (!info)
     return -1;
 
@@ -196,7 +196,7 @@ int context_dl_destroy(struct context_dl_t* context) {
 struct trace_manager_t;
 struct trace_info_t {
   struct trace_manager_t* manager;
-  struct user_info info;
+  struct user_info_t info;
   pid_t pid;
   int status;
 };
@@ -280,6 +280,7 @@ void ALARMhandler(__attribute__ ((unused)) int sig) {
 int trace_info_step(struct trace_info_t* context) {
   int k = 0;
   int ret = 1;
+  // XXX Процесс, использующий sleep, тормозит других.
   while (WIFSTOPPED(context->status) && ++k < INSTRUCTIONS_AT_TIME) {
     trace_info_check_status(context);
     if (ptrace_instruction_pointer(context->pid, &context->info)) {
@@ -323,7 +324,7 @@ int trace_info_check_status(struct trace_info_t* context) {
 
 
 int main(int argc, char ** argv/*, char **envp*/) {
-    struct user_info info;
+    struct user_info_t info;
 
     alarm(1);
     signal(SIGALRM, ALARMhandler);
