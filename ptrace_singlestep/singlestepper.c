@@ -12,6 +12,8 @@
 #include "../elf/elf_utils.h"
 
 #define DEBUG_STEPPER(a...) // { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
+#define DEBUG(a...) { fprintf(stderr, "DEBUG [%s, %d] ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
+#define TRACE(a...) { fprintf(stderr, "TRACE [%s, %d] ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 
 #define ALARM_TIMEOUT_SEC      60
 #define LOCK_FILE_NAME         "LOCK"
@@ -193,81 +195,6 @@ int context_dl_destroy(struct context_dl_t* context) {
 
 
 
-struct trace_manager_t;
-struct trace_info_t {
-  struct trace_manager_t* manager;
-  struct user_info_t info;
-  pid_t pid;
-  int status;
-};
-
-int trace_info_init(struct trace_info_t* context, pid_t pid) {
-  context->pid = pid;
-  ptrace(PTRACE_ATTACH, context->pid, NULL, NULL);
-  waitpid(context->pid, &context->status, 0);
-  ptrace(PTRACE_SETOPTIONS, context->pid, NULL, PTRACE_O_TRACEFORK | PTRACE_O_TRACESYSGOOD);
-  fprint_wait_status(stderr, context->status);
-  return 0;
-}
-
-int trace_info_step(struct trace_info_t* context);
-
-int trace_info_check_status(struct trace_info_t* context);
-
-int trace_info_destroy(struct trace_info_t* context) {
-  fprint_wait_status(stderr, context->status);
-  fprintf(stderr, "Detaching \n");
-  ptrace(PTRACE_DETACH, context->pid, NULL, NULL);
-  context->pid = 0;
-  return 0;
-}
-
-
-
-struct trace_manager_t {
-  struct trace_info_t processes[PROCESS_MAX_COUNT];
-};
-
-int trace_manager_init(struct trace_manager_t* context) {
-  memset(&context->processes, 0, sizeof(context->processes));
-  return 0;
-}
-
-int trace_manager_next_processes_id(struct trace_manager_t* context) {
-  for (int i = 0; i < PROCESS_MAX_COUNT; ++i) {
-    if (!context->processes[i].pid)
-      return i;
-  }
-  return -1;
-}
-
-int trace_manager_step(struct trace_manager_t* context) {
-  int is_end = 1;
-  for (int i = 0; i < PROCESS_MAX_COUNT; ++i) {
-    if (!context->processes[i].pid)
-      continue;
-
-    if (trace_info_step(&context->processes[i])) {
-      trace_info_destroy(&context->processes[i]);
-      continue;
-    }
-
-    is_end = 0;
-  }
-
-  if (break_flag)
-    is_end = 1;
-
-  return is_end;
-}
-
-int trace_manager_destroy(__attribute__ ((unused)) struct trace_manager_t* context) {
-  fprintf(stderr, "END \n");
-  return 0;
-}
-
-
-
 void ALARMhandler(__attribute__ ((unused)) int sig) {
   if (access(LOCK_FILE_NAME, F_OK) != 0) { // file doesn't exist
     break_flag = 1;
@@ -277,22 +204,46 @@ void ALARMhandler(__attribute__ ((unused)) int sig) {
 
 
 
-int trace_info_step(struct trace_info_t* context) {
-  int k = 0;
-  int ret = 1;
-  // XXX Процесс, использующий sleep, тормозит других.
-  while (WIFSTOPPED(context->status) && ++k < INSTRUCTIONS_AT_TIME) {
-    trace_info_check_status(context);
-    if (ptrace_instruction_pointer(context->pid, &context->info)) {
+struct process_t {
+  pid_t pid;
+  pid_t children[PROCESS_MAX_COUNT];
+  struct user_info_t user_info;
+  int status;
+};
+
+int process_init(struct process_t* context, pid_t pid, struct func_call_t func_call);
+int process_run(struct process_t* context);
+int process_check_status(struct process_t* context);
+int process_add_children(struct process_t* context, pid_t pid);
+int process_destroy(struct process_t* context);
+
+int process_init(struct process_t* context, pid_t pid, struct func_call_t func_call) {
+  TRACE("pid: %d \n", pid);
+  context->pid = pid;
+  memset(&context->children, 0x00, sizeof(context->children));
+  context->user_info.func_call = func_call;
+  context->status = 0;
+
+  ptrace(PTRACE_ATTACH, context->pid, NULL, NULL);
+  waitpid(context->pid, &context->status, 0);
+  ptrace(PTRACE_SETOPTIONS, context->pid, NULL, PTRACE_O_TRACEFORK);
+  // fprint_wait_status(stderr, context->status);
+  return 0;
+}
+
+int process_run(struct process_t* context) {
+  TRACE("pid: %d \n", context->pid);
+  while (WIFSTOPPED(context->status)) {
+    process_check_status(context);
+    if (ptrace_instruction_pointer(context->pid, &context->user_info)) {
       return -1;
     }
     context->status = singlestep(context->pid);
-    ret = 0;
   }
-  return ret;
+  return 0;
 }
 
-int trace_info_check_status(struct trace_info_t* context) {
+int process_check_status(struct process_t* context) {
   if (WSTOPSIG(context->status) != SIGTRAP)
     return 0;
 
@@ -300,24 +251,49 @@ int trace_info_check_status(struct trace_info_t* context) {
   if (!event)
     return 0;
 
-  fprintf(stderr, "event %x \n", event);
   long newpid;
   ptrace(PTRACE_GETEVENTMSG, context->pid, NULL, (long) &newpid);
-  fprintf(stderr, "newpid %ld \n", newpid);
+  DEBUG("new pid %ld \n", newpid);
   int status;
   waitpid(newpid, &status, 0);
+
 
   // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
   ptrace(PTRACE_DETACH, newpid, NULL, NULL); // XXX
 
-  struct trace_manager_t* manager = context->manager;
-  int id = trace_manager_next_processes_id(manager);
-  if (id != -1) {
-    manager->processes[id].manager = context->manager;
-    manager->processes[id].info    = context->info;
-    manager->processes[id].status  = status;
-    trace_info_init(&manager->processes[id], newpid);
+  // TODO check context->children.
+  pid_t child_pid = fork();
+
+  if (child_pid == 0) { // child.
+    struct process_t process;
+    process_init(&process, newpid, context->user_info.func_call);
+    process_run(&process);
+    process_destroy(&process);
+    exit(0);
   }
+  else if (child_pid > 0) { // parent.
+    process_add_children(context, child_pid);
+    // TODO check child.
+  }
+
+  return 0;
+}
+
+int process_add_children(struct process_t* context, pid_t pid) {
+  for (int i = 0; i < PROCESS_MAX_COUNT; ++i) {
+    if (context->children[i] == 0) {
+      context->children[i] = pid;
+      return 0;
+    }
+  }
+  return -1;
+}
+
+int process_destroy(struct process_t* context) {
+  TRACE("pid: %d \n", context->pid);
+  context->pid = 0;
+  memset(&context->children, 0x00, sizeof(context->children));
+  context->status = 0;
   return 0;
 }
 
@@ -371,14 +347,10 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
 
     {
-      struct trace_manager_t manager;
-      trace_manager_init(&manager);
-      manager.processes[0].info = info;
-      manager.processes[0].manager = &manager;
-      trace_info_init(&manager.processes[0], atoi(argv[2]));
-      while (!trace_manager_step(&manager))
-        ;
-      trace_manager_destroy(&manager);
+      struct process_t process;
+      process_init(&process, atoi(argv[2]), info.func_call);
+      process_run(&process);
+      process_destroy(&process);
     }
 
 
@@ -387,7 +359,7 @@ int main(int argc, char ** argv/*, char **envp*/) {
 }
 
 int inject_data(pid_t pid, unsigned char *src, void *dst, int len) {
-  int      i;
+  int       i;
   long long *s = (long long *) src;
   long long *d = (long long *) dst;
 
