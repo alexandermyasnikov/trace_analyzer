@@ -15,14 +15,27 @@
 #define DEBUG(a...) { fprintf(stderr, "DEBUG [%s, %d] ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 #define TRACE(a...) { fprintf(stderr, "TRACE [%s, %d] ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 
-#define ALARM_TIMEOUT_SEC      60
-#define LOCK_FILE_NAME         "LOCK"
-#define PROCESS_MAX_COUNT      10
-#define INSTRUCTIONS_AT_TIME   10000
+#define TIMEOUT_CHECK_LOCK_FILE   10
+#define LOCK_FILE_NAME            "LOCK"
+#define PROCESS_MAX_COUNT         10
 
 
 
 volatile int break_flag = 0;
+
+
+
+void signal_handler(int sig) {
+  DEBUG("sig %d pid %d \n", sig, getpid());
+  switch (sig) {
+    case SIGINT:
+    case SIGUSR1: {
+      break_flag = 1;
+      DEBUG("break_flag %d \n", break_flag);
+      break;
+    }
+  }
+}
 
 
 
@@ -195,15 +208,6 @@ int context_dl_destroy(struct context_dl_t* context) {
 
 
 
-void ALARMhandler(__attribute__ ((unused)) int sig) {
-  if (access(LOCK_FILE_NAME, F_OK) != 0) { // file doesn't exist
-    break_flag = 1;
-  }
-  alarm(ALARM_TIMEOUT_SEC);
-}
-
-
-
 struct process_t {
   pid_t pid;
   pid_t children[PROCESS_MAX_COUNT];
@@ -213,6 +217,7 @@ struct process_t {
 
 int process_init(struct process_t* context, pid_t pid, struct func_call_t func_call);
 int process_run(struct process_t* context);
+int process_wait_children(struct process_t* context);
 int process_check_status(struct process_t* context);
 int process_add_children(struct process_t* context, pid_t pid);
 int process_destroy(struct process_t* context);
@@ -233,7 +238,7 @@ int process_init(struct process_t* context, pid_t pid, struct func_call_t func_c
 
 int process_run(struct process_t* context) {
   TRACE("pid: %d \n", context->pid);
-  while (WIFSTOPPED(context->status)) {
+  while (WIFSTOPPED(context->status) && !break_flag) {
     process_check_status(context);
     if (ptrace_instruction_pointer(context->pid, &context->user_info)) {
       return -1;
@@ -243,37 +248,49 @@ int process_run(struct process_t* context) {
   return 0;
 }
 
+int process_wait_children(struct process_t* context) {
+  TRACE("pid: %d \n", context->pid);
+  for (int i = 0; i < PROCESS_MAX_COUNT; ++i) {
+    if (context->children[i]) {
+      int status;
+      DEBUG("wait pid %d \n", context->children[i]);
+      kill(context->children[i], SIGUSR1);
+      waitpid(context->children[i], &status, 0);
+    }
+  }
+  return 0;
+}
+
 int process_check_status(struct process_t* context) {
   if (WSTOPSIG(context->status) != SIGTRAP)
     return 0;
 
   int event = (context->status >> 16) & 0xFFFF;
-  if (!event)
+  if (event != PTRACE_EVENT_FORK)
     return 0;
 
   long newpid;
   ptrace(PTRACE_GETEVENTMSG, context->pid, NULL, (long) &newpid);
-  DEBUG("new pid %ld \n", newpid);
   int status;
   waitpid(newpid, &status, 0);
-
 
   // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
   ptrace(PTRACE_DETACH, newpid, NULL, NULL); // XXX
 
-  // TODO check context->children.
   pid_t child_pid = fork();
 
   if (child_pid == 0) { // child.
+    DEBUG("new pid %d for %ld\n", getpid(), newpid);
     struct process_t process;
     process_init(&process, newpid, context->user_info.func_call);
     process_run(&process);
+    process_wait_children(&process);
     process_destroy(&process);
     exit(0);
-  }
-  else if (child_pid > 0) { // parent.
-    process_add_children(context, child_pid);
-    // TODO check child.
+  } else if (child_pid > 0) { // parent.
+    if (process_add_children(context, child_pid)) {
+      kill(child_pid, SIGUSR1);
+    }
   }
 
   return 0;
@@ -291,6 +308,7 @@ int process_add_children(struct process_t* context, pid_t pid) {
 
 int process_destroy(struct process_t* context) {
   TRACE("pid: %d \n", context->pid);
+  ptrace(PTRACE_DETACH, context->pid, NULL, NULL);
   context->pid = 0;
   memset(&context->children, 0x00, sizeof(context->children));
   context->status = 0;
@@ -302,13 +320,13 @@ int process_destroy(struct process_t* context) {
 int main(int argc, char ** argv/*, char **envp*/) {
     struct user_info_t info;
 
-    alarm(1);
-    signal(SIGALRM, ALARMhandler);
-
     if (argc < 3) {
         fprintf(stderr, "Usage: %s elffile pid \n", argv[0]);
         exit(-1);
     }
+
+    signal(SIGUSR1, signal_handler);
+    signal(SIGINT,  signal_handler);
 
     info.func_call.callbacks_shared = "./sample/callbacks.so";
     info.func_call.func_name = "sum";
@@ -346,14 +364,36 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
 
 
-    {
+    pid_t child_pid = fork();
+
+    if (child_pid == 0) {
+      DEBUG("new pid %d for %d\n", getpid(), atoi(argv[2]));
       struct process_t process;
       process_init(&process, atoi(argv[2]), info.func_call);
       process_run(&process);
+      process_wait_children(&process);
       process_destroy(&process);
+      exit(0);
+    } else if (child_pid > 0) {
+      int status;
+      while (1) {
+        int status;
+        int ret = waitpid(-1, &status, WNOHANG);
+        DEBUG("check LOCK file \n");
+
+        if (ret == child_pid) {
+          break;
+        }
+
+        if (access(LOCK_FILE_NAME, F_OK) != 0) { // LOCK file doesn't exist
+          kill(child_pid, SIGUSR1);
+          break;
+        }
+
+        sleep(TIMEOUT_CHECK_LOCK_FILE);
+      }
+      waitpid(child_pid, &status, 0);
     }
-
-
 
     return 0;
 }
