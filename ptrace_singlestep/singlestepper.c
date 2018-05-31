@@ -16,7 +16,7 @@
 #define TRACE(a...) { fprintf(stderr, "TRACE [%s, %d] ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 
 #define TIMEOUT_CHECK_LOCK_FILE   10
-#define LOCK_FILE_NAME            "LOCK"
+#define LOCK_FILE_NAME            "/tmp/SINGLE_STEPPER_LOCK"
 #define PROCESS_MAX_COUNT         10
 
 
@@ -31,7 +31,6 @@ void signal_handler(int sig) {
     case SIGINT:
     case SIGUSR1: {
       break_flag = 1;
-      DEBUG("break_flag %d \n", break_flag);
       break;
     }
   }
@@ -233,6 +232,7 @@ int process_init(struct process_t* context, pid_t pid, struct func_call_t func_c
   waitpid(context->pid, &context->status, 0);
   ptrace(PTRACE_SETOPTIONS, context->pid, NULL, PTRACE_O_TRACEFORK);
   // fprint_wait_status(stderr, context->status);
+  TRACE("~ pid: %d \n", pid);
   return 0;
 }
 
@@ -245,6 +245,7 @@ int process_run(struct process_t* context) {
     }
     context->status = singlestep(context->pid);
   }
+  TRACE("~ pid: %d \n", context->pid);
   return 0;
 }
 
@@ -258,6 +259,7 @@ int process_wait_children(struct process_t* context) {
       waitpid(context->children[i], &status, 0);
     }
   }
+  TRACE("~ pid: %d \n", context->pid);
   return 0;
 }
 
@@ -312,6 +314,7 @@ int process_destroy(struct process_t* context) {
   context->pid = 0;
   memset(&context->children, 0x00, sizeof(context->children));
   context->status = 0;
+  TRACE("~ pid: %d \n", context->pid);
   return 0;
 }
 
@@ -352,12 +355,13 @@ int main(int argc, char ** argv/*, char **envp*/) {
     {
       struct context_dl_t context_dl;
       context_dl_init(&context_dl, info.func_call.callbacks_shared);
+
       context_dl_sym(&context_dl, info.func_call.func_call_name, (void**) &info.func_call.callback_call);
       fprintf(stderr, "func_call: %s   addr: %p \n", info.func_call.func_call_name,
               (void *) info.func_call.callback_call);
       context_dl_sym(&context_dl, info.func_call.func_ret_name, (void**) &info.func_call.callback_ret);
-      fprintf(stderr, "func_ret: %s   addr: %p \n", info.func_call.func_ret_name,
-              (void *) info.func_call.callback_call);
+      fprintf(stderr, "func_ret:  %s   addr: %p \n", info.func_call.func_ret_name,
+              (void *) info.func_call.callback_ret);
 
       // context_dl_destroy(&context_dl);
     }
@@ -376,6 +380,7 @@ int main(int argc, char ** argv/*, char **envp*/) {
       exit(0);
     } else if (child_pid > 0) {
       int status;
+      creat(LOCK_FILE_NAME, 0777);
       while (1) {
         int status;
         int ret = waitpid(-1, &status, WNOHANG);
@@ -393,6 +398,7 @@ int main(int argc, char ** argv/*, char **envp*/) {
         sleep(TIMEOUT_CHECK_LOCK_FILE);
       }
       waitpid(child_pid, &status, 0);
+      remove(LOCK_FILE_NAME);
     }
 
     return 0;
