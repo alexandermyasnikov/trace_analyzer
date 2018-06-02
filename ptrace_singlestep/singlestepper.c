@@ -99,38 +99,6 @@ void print_info(FILE *stream, struct user_info_t* info) {
   fprintf(stream, " \n\n");
 }
 
-int ptrace_instruction_pointer(int pid, struct user_info_t *info) {
-  if (ptrace(PTRACE_GETREGS, pid, NULL, &info->regs)) {
-    ERROR("  Error fetching registers from child process: %s\n", strerror(errno));
-    return -1;
-  }
-
-  long ins = ptrace(PTRACE_PEEKTEXT, pid, info->regs.rip, NULL);
-  DEBUG_STEPPER("INS:  %16lx   %16llx \n", ins, info->regs.rip);
-
-  if (info->regs.rip == info->func_call.ip) {
-    if (info->func_call.callback_call) {
-      ((callback_t) info->func_call.callback_call)(&info->regs);
-    }
-  }
-
-  // ptrace(PTRACE_SETREGS, pid, NULL, &info->regs); // XXX
-
-  // print_info(stderr, info);
-
-  return 0;
-}
-
-int singlestep(int pid) {
-  int retval, status;
-  retval = ptrace(PTRACE_SINGLESTEP, pid, 0, 0);
-  if (retval) {
-    return retval;
-  }
-  waitpid(pid, &status, 0);
-  return status;
-}
-
 struct context_symbols_t {
   int fd;
   off_t st_size;
@@ -194,6 +162,8 @@ struct process_t {
 
 int process_init(struct process_t* context, pid_t pid, struct func_call_t func_call);
 int process_run(struct process_t* context);
+int process_singlestep(struct process_t* context);
+int process_check_regs(struct process_t* context);
 int process_wait_children(struct process_t* context);
 int process_check_status(struct process_t* context);
 int process_add_children(struct process_t* context, pid_t pid);
@@ -218,12 +188,44 @@ int process_run(struct process_t* context) {
   DEBUG("pid: %d \n", context->pid);
   while (WIFSTOPPED(context->status) && !break_flag) {
     process_check_status(context);
-    if (ptrace_instruction_pointer(context->pid, &context->user_info)) {
+    if (process_check_regs(context)) {
       return -1;
     }
-    context->status = singlestep(context->pid);
+    context->status = process_singlestep(context);
   }
   TRACE("~ \n");
+  return 0;
+}
+
+int process_singlestep(struct process_t* context) {
+  int retval;
+  retval = ptrace(PTRACE_SINGLESTEP, context->pid, 0, 0);
+  if (retval) {
+    return retval;
+  }
+  waitpid(context->pid, &context->status, 0);
+  return context->status;
+}
+
+int process_check_regs(struct process_t* context) {
+  if (ptrace(PTRACE_GETREGS, context->pid, NULL, &context->user_info.regs)) {
+    ERROR("  Error fetching registers from child process: %s\n", strerror(errno));
+    return -1;
+  }
+
+  long ins = ptrace(PTRACE_PEEKTEXT, context->pid, context->user_info.regs.rip, NULL);
+  DEBUG_STEPPER("INS:  %16lx   %16llx \n", ins, context->user_info.regs.rip);
+
+  if (context->user_info.regs.rip == context->user_info.func_call.ip) {
+    if (context->user_info.func_call.callback_call) {
+      ((callback_t) context->user_info.func_call.callback_call)(&context->user_info.regs);
+    }
+  }
+
+  // ptrace(PTRACE_SETREGS, context->pid, NULL, &info->regs); // XXX
+
+  // print_info(stderr, info);
+
   return 0;
 }
 
