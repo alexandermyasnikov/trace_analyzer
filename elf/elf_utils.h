@@ -127,6 +127,19 @@ int print_elf(Elf64_Ehdr* elf_hdr) {
         fprintf(stderr, "  st_value:    %lx  \n", symtab->st_value);
         fprintf(stderr, "  st_size:     %lx  \n", symtab->st_size);
       }
+    } else if (elf_shdr->sh_type == SHT_DYNSYM) {
+      fprintf(stderr, "type:  %s   \n", "SHT_DYNSYM");
+
+      for (unsigned long i = 0; i < elf_shdr->sh_size; i += sizeof(Elf64_Sym)) {
+        Elf64_Sym* symtab = (Elf64_Sym*) (((char*) elf_hdr) + elf_shdr->sh_offset + i);
+        fprintf(stderr, " \n");
+        fprintf(stderr, "  st_name:     %x   \n", symtab->st_name);
+        fprintf(stderr, "  st_info:     %hhx \n", symtab->st_info);
+        fprintf(stderr, "  st_other:    %hhx \n", symtab->st_other);
+        fprintf(stderr, "  st_shndx:    %hx  \n", symtab->st_shndx);
+        fprintf(stderr, "  st_value:    %lx  \n", symtab->st_value);
+        fprintf(stderr, "  st_size:     %lx  \n", symtab->st_size);
+      }
     }
   }
 
