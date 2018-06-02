@@ -303,7 +303,17 @@ int process_destroy(struct process_t* context) {
 
 
 
-// IMPLEMENTATION
+// FORWARD DECLARATION
+
+
+
+struct stepper_t stepper;
+int stepper_run(struct stepper_t* context, struct input_t* input, struct func_call_t func_call);
+int stepper_wait(struct stepper_t* context);
+
+
+
+// DEFINITOIN
 
 
 
@@ -426,6 +436,63 @@ int pm_destroy(struct pm_t* context) {
 
 
 
+
+
+struct stepper_t {
+	pid_t child_pid;
+};
+
+int stepper_run(struct stepper_t* context, struct input_t* input, struct func_call_t func_call) {
+  TRACE(" \n");
+  context->child_pid = fork();
+
+  if (context->child_pid == 0) {
+    DEBUG("new pid %d \n", input->pid);
+    struct process_t process;
+    process_init(&process, input->pid, func_call);
+    process_run(&process);
+    process_wait_children(&process);
+    process_destroy(&process);
+    exit(0);
+  } else if (context->child_pid > 0) {
+		stepper_wait(context);
+  }
+
+  TRACE("~ \n");
+  return 0;
+}
+
+int stepper_wait(struct stepper_t* context) {
+  TRACE(" \n");
+	int status;
+	creat(LOCK_FILE_NAME, 0777);
+	while (1) {
+		int status;
+		int ret = waitpid(-1, &status, WNOHANG);
+		DEBUG("check LOCK file \n");
+
+		if (ret == context->child_pid) {
+			break;
+		}
+
+		if (access(LOCK_FILE_NAME, F_OK) != 0) { // LOCK file doesn't exist
+			kill(context->child_pid, SIGUSR1);
+			break;
+		}
+
+		sleep(TIMEOUT_CHECK_LOCK_FILE);
+	}
+	waitpid(context->child_pid, &status, 0);
+	remove(LOCK_FILE_NAME);
+
+  TRACE("~ \n");
+	return 0;
+}
+
+
+
+
+
 int main(int argc, char ** argv/*, char **envp*/) {
     struct user_info_t info;
 
@@ -436,7 +503,6 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
     signal(SIGUSR1, signal_handler);
     signal(SIGINT,  signal_handler);
-
 
     struct input_t input = {
       .pid = atoi(argv[1]),
@@ -464,40 +530,8 @@ int main(int argc, char ** argv/*, char **envp*/) {
       // ic_destroy(&ic);
     }
 
-
-
-    pid_t child_pid = fork();
-
-    if (child_pid == 0) {
-      DEBUG("new pid %d \n", input.pid);
-      struct process_t process;
-      process_init(&process, input.pid, info.func_call);
-      process_run(&process);
-      process_wait_children(&process);
-      process_destroy(&process);
-      exit(0);
-    } else if (child_pid > 0) {
-      int status;
-      creat(LOCK_FILE_NAME, 0777);
-      while (1) {
-        int status;
-        int ret = waitpid(-1, &status, WNOHANG);
-        DEBUG("check LOCK file \n");
-
-        if (ret == child_pid) {
-          break;
-        }
-
-        if (access(LOCK_FILE_NAME, F_OK) != 0) { // LOCK file doesn't exist
-          kill(child_pid, SIGUSR1);
-          break;
-        }
-
-        sleep(TIMEOUT_CHECK_LOCK_FILE);
-      }
-      waitpid(child_pid, &status, 0);
-      remove(LOCK_FILE_NAME);
-    }
+    struct stepper_t stepper;
+    stepper_run(&stepper, &input, info.func_call);
 
     return 0;
 }
