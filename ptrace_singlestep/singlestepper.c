@@ -41,6 +41,17 @@ void signal_handler(int sig) {
 
 typedef void (*callback_t)(struct user_regs_struct*);
 
+
+
+struct input_t {
+  int           pid;
+  const char*   callbacks_library;
+  const char*   wrapper_function_name;
+  const char*   original_function_name;
+};
+
+
+
 struct func_call_t { // old
   unsigned long long int ip;      // instruction_pointer
   callback_t callback_call;       // Указатель на новую функцию с именем func_call_name.
@@ -418,8 +429,8 @@ int pm_destroy(struct pm_t* context) {
 int main(int argc, char ** argv/*, char **envp*/) {
     struct user_info_t info;
 
-    if (argc < 3) {
-        ERROR("  Usage: %s elffile pid \n", argv[0]);
+    if (argc < 2) {
+        ERROR("  Usage: %s process_pid \n", argv[0]);
         exit(-1);
     }
 
@@ -427,14 +438,20 @@ int main(int argc, char ** argv/*, char **envp*/) {
     signal(SIGINT,  signal_handler);
 
 
+    struct input_t input = {
+      .pid = atoi(argv[1]),
+      .callbacks_library = "./sample/callbacks.so",
+      .wrapper_function_name = "sum_call",
+      .original_function_name = "func_10",
+    };
 
     {
       struct ic_t ic;
-      ic_init(&ic, "./sample/callbacks.so", "sum_call");
+      ic_init(&ic, input.callbacks_library, input.wrapper_function_name);
 
       struct pm_t pm;
-      pm_init(&pm, atoi(argv[2]));
-      pm_get_ip(&pm, "func_10", &ic.ip);
+      pm_init(&pm, input.pid);
+      pm_get_ip(&pm, input.original_function_name, &ic.ip);
       pm_destroy(&pm);
 
       ic_set_callback(&ic);
@@ -452,9 +469,9 @@ int main(int argc, char ** argv/*, char **envp*/) {
     pid_t child_pid = fork();
 
     if (child_pid == 0) {
-      DEBUG("new pid %d for %d\n", getpid(), atoi(argv[2]));
+      DEBUG("new pid %d \n", input.pid);
       struct process_t process;
-      process_init(&process, atoi(argv[2]), info.func_call);
+      process_init(&process, input.pid, info.func_call);
       process_run(&process);
       process_wait_children(&process);
       process_destroy(&process);
