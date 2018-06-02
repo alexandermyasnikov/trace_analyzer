@@ -42,15 +42,8 @@ void signal_handler(int sig) {
 typedef void (*callback_t)(struct user_regs_struct*);
 
 struct func_call_t { // old
-  const char* callbacks_shared;   // Имя динамической библиотеки, содержащее новую функцию.
-  const char* func_name;          // Имя перехватыемой функции.
-  Elf64_Addr func_addr;           // Адрес перехватываемой функции.
-  unsigned long long rbp_call;    // Для определения сответствующей RET инструкции. // TODO rip.
   unsigned long long int ip;      // instruction_pointer
-  const char* func_call_name;     // Имя новой функции для CALL инструкции.
-  const char* func_ret_name;      // Имя новой функции для RET инструкции.
   callback_t callback_call;       // Указатель на новую функцию с именем func_call_name.
-  callback_t callback_ret;        // Указатель на новую функцию с именем func_ret_name.
 };
 
 
@@ -76,7 +69,6 @@ int pm_destroy(struct pm_t* context);
 
 struct user_info_t {
   struct user_regs_struct regs;
-  int last_error;
   struct func_call_t func_call;
 };
 
@@ -104,8 +96,6 @@ int ptrace_instruction_pointer(int pid, struct user_info_t *info) {
     ERROR("  Error fetching registers from child process: %s\n", strerror(errno));
     return -1;
   }
-
-  info->last_error = 0;
 
   long ins = ptrace(PTRACE_PEEKTEXT, pid, info->regs.rip, NULL);
   DEBUG_STEPPER("INS:  %16lx   %16llx \n", ins, info->regs.rip);
