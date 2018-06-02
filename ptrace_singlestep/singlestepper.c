@@ -108,11 +108,6 @@ int ptrace_instruction_pointer(int pid, struct user_info_t *info) {
   info->last_error = 0;
 
   long ins = ptrace(PTRACE_PEEKTEXT, pid, info->regs.rip, NULL);
-  // long ins_copy = ins;
-
-  // unsigned char opcode = ins & 0xFF;
-  // ins_copy >>= 8;
-
   DEBUG_STEPPER("INS:  %16lx   %16llx \n", ins, info->regs.rip);
 
   if (info->regs.rip == info->func_call.ip) {
@@ -121,52 +116,7 @@ int ptrace_instruction_pointer(int pid, struct user_info_t *info) {
     }
   }
 
-  /*
-  if (opcode == 0xE8) {
-    int ptr_offset = ins_copy & 0xFFFFFFFF;
-    long ptr = info->regs.rip + ptr_offset + sizeof(opcode) + sizeof(ptr_offset);
-    DEBUG_STEPPER("  %hhx CALL   ptr: %x %lx \n", opcode, ptr_offset, ptr);
-    DEBUG_STEPPER("arg1 rdi: %llx \n", info->regs.rdi);
-    DEBUG_STEPPER("arg2 rsi: %llx \n", info->regs.rsi);
-    DEBUG_STEPPER("arg3 rdx: %llx \n", info->regs.rdx);
-    DEBUG_STEPPER("arg4 rcx: %llx \n", info->regs.rcx);
-    DEBUG_STEPPER("arg5  r8: %llx \n", info->regs.r8);
-    DEBUG_STEPPER("arg6  r9: %llx \n", info->regs.r9);
-    DEBUG_STEPPER("rbp: %llx \n", info->regs.rbp);
-    DEBUG_STEPPER("rsp: %llx \n", info->regs.rsp);
-
-    if ((ptr & 0xFFF) == info->func_call.func_addr) { // TODO
-      printf("  %hhx CALL   ptr: %x %lx \n", opcode, ptr_offset, ptr);
-      if (!info->func_call.rbp_call) {
-        info->func_call.rbp_call = info->regs.rbp;
-        if (info->func_call.callback_call) {
-          ((callback_t) info->func_call.callback_call)(&info->regs);
-        }
-      } else {
-        ERROR("  ERROR: nested call \n");
-      }
-    }
-
-    if ((ptr & 0xFFF) == info->addr1) { // HACK
-      info->regs.rdi = -info->regs.rdi;
-      ptrace(PTRACE_SETREGS, pid, NULL, &info->regs);
-    }
-  } else if (opcode == 0xC3) {
-    DEBUG_STEPPER("  %hhx RET \n", opcode);
-    DEBUG_STEPPER("ret rax: %llx \n", info->regs.rax);
-    DEBUG_STEPPER("rbp: %llx \n", info->regs.rbp);
-    DEBUG_STEPPER("rsp: %llx \n", info->regs.rsp);
-    if (info->func_call.rbp_call && info->func_call.rbp_call == info->regs.rbp) {
-      info->func_call.rbp_call = 0;
-      if (info->func_call.callback_ret) {
-        ((callback_t) info->func_call.callback_ret)(&info->regs);
-      }
-    }
-  } else {
-    // DEBUG_STEPPER("opcр: %16hhx \n", opcode);
-    info->last_error = -1;
-  }
-  */
+  // ptrace(PTRACE_SETREGS, pid, NULL, &info->regs); // XXX
 
   // print_info(stderr, info);
 
@@ -261,7 +211,6 @@ int process_init(struct process_t* context, pid_t pid, struct func_call_t func_c
   ptrace(PTRACE_ATTACH, context->pid, NULL, NULL);
   waitpid(context->pid, &context->status, 0);
   ptrace(PTRACE_SETOPTIONS, context->pid, NULL, PTRACE_O_TRACEFORK);
-  // fprint_wait_status(stderr, context->status);
   TRACE("~ \n");
   return 0;
 }
@@ -486,45 +435,6 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
     signal(SIGUSR1, signal_handler);
     signal(SIGINT,  signal_handler);
-
-    // old
-    info.func_call.callbacks_shared = "./sample/callbacks.so";
-    info.func_call.func_name = "sum";
-    info.func_call.func_name = "func_10";
-    info.func_call.func_addr = 0;
-    info.func_call.rbp_call = 0;
-    info.func_call.func_call_name = "sum_call";
-    info.func_call.func_ret_name = "sum_ret";
-    info.func_call.callback_call = NULL;
-    info.func_call.callback_ret = NULL;
-
-    /*
-    { // old
-      struct context_symbols_t context_symbols;
-      context_symbols_init(&context_symbols, argv[1]);
-
-      Elf64_Addr addr;
-      context_symbols_lookup(&context_symbols, info.func_call.func_name, &addr);
-      DEBUG("func_name: %s   addr: %lx \n", info.func_call.func_name, addr);
-      info.func_call.func_addr = addr;
-
-      context_symbols_destroy(&context_symbols);
-    }
-
-    { // old
-      struct context_dl_t context_dl;
-      context_dl_init(&context_dl, info.func_call.callbacks_shared);
-
-      context_dl_sym(&context_dl, info.func_call.func_call_name, (void**) &info.func_call.callback_call);
-      DEBUG("func_call: %s   addr: %p \n", info.func_call.func_call_name,
-              (void *) info.func_call.callback_call);
-      context_dl_sym(&context_dl, info.func_call.func_ret_name, (void**) &info.func_call.callback_ret);
-      DEBUG("func_ret:  %s   addr: %p \n", info.func_call.func_ret_name,
-              (void *) info.func_call.callback_ret);
-
-      // context_dl_destroy(&context_dl);
-    }
-    */
 
 
 
