@@ -100,9 +100,6 @@ void print_info(FILE *stream, struct user_info_t* info) {
 }
 
 int ptrace_instruction_pointer(int pid, struct user_info_t *info) {
-  if (!info)
-    return -1;
-
   if (ptrace(PTRACE_GETREGS, pid, NULL, &info->regs)) {
     ERROR("  Error fetching registers from child process: %s\n", strerror(errno));
     return -1;
@@ -370,9 +367,9 @@ int pm_init(struct pm_t* context, pid_t pid) {
   snprintf(maps_path, 50, "/proc/%d/maps", pid);
 
   context->maps = fopen(maps_path, "r");
-	if(!context->maps){
-		ERROR("  Cannot open the memory maps, %s\n", strerror(errno));
-		return -1;
+  if(!context->maps){
+    ERROR("  Cannot open the memory maps, %s\n", strerror(errno));
+    return -1;
   }
 
   TRACE("~ \n");
@@ -439,7 +436,7 @@ int pm_destroy(struct pm_t* context) {
 
 
 struct stepper_t {
-	pid_t child_pid;
+  pid_t child_pid;
 };
 
 int stepper_run(struct stepper_t* context, struct input_t* input, struct func_call_t func_call) {
@@ -455,7 +452,7 @@ int stepper_run(struct stepper_t* context, struct input_t* input, struct func_ca
     process_destroy(&process);
     exit(0);
   } else if (context->child_pid > 0) {
-		stepper_wait(context);
+    stepper_wait(context);
   }
 
   TRACE("~ \n");
@@ -464,29 +461,29 @@ int stepper_run(struct stepper_t* context, struct input_t* input, struct func_ca
 
 int stepper_wait(struct stepper_t* context) {
   TRACE(" \n");
-	int status;
-	creat(LOCK_FILE_NAME, 0777);
-	while (1) {
-		int status;
-		int ret = waitpid(-1, &status, WNOHANG);
-		DEBUG("check LOCK file \n");
+  int status;
+  creat(LOCK_FILE_NAME, 0777);
+  while (1) {
+    int status;
+    int ret = waitpid(-1, &status, WNOHANG);
+    DEBUG("check LOCK file \n");
 
-		if (ret == context->child_pid) {
-			break;
-		}
+    if (ret == context->child_pid) {
+      break;
+    }
 
-		if (access(LOCK_FILE_NAME, F_OK) != 0) { // LOCK file doesn't exist
-			kill(context->child_pid, SIGUSR1);
-			break;
-		}
+    if (access(LOCK_FILE_NAME, F_OK) != 0) { // LOCK file doesn't exist
+      kill(context->child_pid, SIGUSR1);
+      break;
+    }
 
-		sleep(TIMEOUT_CHECK_LOCK_FILE);
-	}
-	waitpid(context->child_pid, &status, 0);
-	remove(LOCK_FILE_NAME);
+    sleep(TIMEOUT_CHECK_LOCK_FILE);
+  }
+  waitpid(context->child_pid, &status, 0);
+  remove(LOCK_FILE_NAME);
 
   TRACE("~ \n");
-	return 0;
+  return 0;
 }
 
 
@@ -515,10 +512,12 @@ int main(int argc, char ** argv/*, char **envp*/) {
       struct ic_t ic;
       ic_init(&ic, input.callbacks_library, input.wrapper_function_name);
 
-      struct pm_t pm;
-      pm_init(&pm, input.pid);
-      pm_get_ip(&pm, input.original_function_name, &ic.ip);
-      pm_destroy(&pm);
+      {
+        struct pm_t pm;
+        pm_init(&pm, input.pid);
+        pm_get_ip(&pm, input.original_function_name, &ic.ip);
+        pm_destroy(&pm);
+      }
 
       ic_set_callback(&ic);
 
@@ -527,11 +526,15 @@ int main(int argc, char ** argv/*, char **envp*/) {
       info.func_call.callback_call = (callback_t) ic.cb;
 
       ic_debug(&ic);
-      // ic_destroy(&ic);
+
+      {
+        struct stepper_t stepper;
+        stepper_run(&stepper, &input, info.func_call);
+      }
+
+      ic_destroy(&ic);
     }
 
-    struct stepper_t stepper;
-    stepper_run(&stepper, &input, info.func_call);
 
     return 0;
 }
