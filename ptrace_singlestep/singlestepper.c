@@ -28,18 +28,11 @@ volatile int break_flag = 0;
 
 
 
-typedef void (*callback_t) (struct user_regs_struct*);
-
-
-
-struct func_call_t { // old
-  unsigned long long int ip;      // instruction_pointer
-  callback_t callback_call;       // Указатель на новую функцию с именем func_call_name.
-};
-
-
-
 // FORWARD DECLARATION
+
+
+
+typedef void (*callback_t) (struct user_regs_struct*);
 
 
 
@@ -74,13 +67,13 @@ struct user_info_t;
 
 struct pm_t;
 int pm_init(struct pm_t* context, pid_t pid);
-int pm_get_ip(struct pm_t* context, const char* fn, long long int* ip);
+int pm_get_ip(struct pm_t* context, const char* fn, unsigned long long int* ip);
 int pm_destroy(struct pm_t* context);
 
 
 
 struct process_t;
-int process_init(struct process_t* context, pid_t pid, struct func_call_t func_call);
+int process_init(struct process_t* context, pid_t pid, struct ic_t* ic);
 int process_run(struct process_t* context);
 int process_singlestep(struct process_t* context);
 int process_check_regs(struct process_t* context);
@@ -92,7 +85,7 @@ int process_destroy(struct process_t* context);
 
 
 struct stepper_t stepper;
-int stepper_run(struct stepper_t* context, struct input_t* input, struct func_call_t func_call);
+int stepper_run(struct stepper_t* context, struct input_t* input, struct ic_t* ic);
 int stepper_wait(struct stepper_t* context);
 
 
@@ -171,7 +164,7 @@ int context_dl_destroy(struct context_dl_t* context) {
 
 
 struct ic_t { // instruction_callback_t
-  long long int ip;    // instruction_pointer
+  unsigned long long int ip;    // instruction_pointer
   const char*   shn;   // shared_name
   const char*   fn;    // function_name
   void*         cb;    // callback
@@ -219,7 +212,7 @@ int ic_set_callback(struct ic_t* context) {
 
 struct user_info_t {
   struct user_regs_struct regs;
-  struct func_call_t func_call;
+  struct ic_t ic;
 };
 
 
@@ -244,7 +237,7 @@ int pm_init(struct pm_t* context, pid_t pid) {
   return 0;
 }
 
-int pm_get_ip(struct pm_t* context, const char* fn, long long int* ip) {
+int pm_get_ip(struct pm_t* context, const char* fn, unsigned long long int* ip) {
   TRACE(" \n");
 
   char* line = NULL;
@@ -310,11 +303,11 @@ struct process_t {
   int status;
 };
 
-int process_init(struct process_t* context, pid_t pid, struct func_call_t func_call) {
+int process_init(struct process_t* context, pid_t pid, struct ic_t* ic) {
   TRACE(" \n");
   context->pid = pid;
   memset(&context->children, 0x00, sizeof(context->children));
-  context->user_info.func_call = func_call;
+  context->user_info.ic = *ic;
   context->status = 0;
 
   ptrace(PTRACE_ATTACH, context->pid, NULL, NULL);
@@ -357,9 +350,9 @@ int process_check_regs(struct process_t* context) {
   long ins = ptrace(PTRACE_PEEKTEXT, context->pid, context->user_info.regs.rip, NULL);
   DEBUG_STEPPER("INS:  %16lx   %16llx \n", ins, context->user_info.regs.rip);
 
-  if (context->user_info.regs.rip == context->user_info.func_call.ip) {
-    if (context->user_info.func_call.callback_call) {
-      ((callback_t) context->user_info.func_call.callback_call)(&context->user_info.regs);
+  if (context->user_info.regs.rip == context->user_info.ic.ip) {
+    if (context->user_info.ic.cb) {
+      ((callback_t) context->user_info.ic.cb)(&context->user_info.regs);
     }
   }
 
@@ -403,7 +396,7 @@ int process_check_status(struct process_t* context) {
   if (child_pid == 0) { // child.
     DEBUG("new pid %d for %ld\n", getpid(), newpid);
     struct process_t process;
-    process_init(&process, newpid, context->user_info.func_call);
+    process_init(&process, newpid, &context->user_info.ic);
     process_run(&process);
     process_wait_children(&process);
     process_destroy(&process);
@@ -445,14 +438,14 @@ struct stepper_t {
   pid_t child_pid;
 };
 
-int stepper_run(struct stepper_t* context, struct input_t* input, struct func_call_t func_call) {
+int stepper_run(struct stepper_t* context, struct input_t* input, struct ic_t* ic) {
   TRACE(" \n");
   context->child_pid = fork();
 
   if (context->child_pid == 0) {
     DEBUG("new pid %d \n", input->pid);
     struct process_t process;
-    process_init(&process, input->pid, func_call);
+    process_init(&process, input->pid, ic);
     process_run(&process);
     process_wait_children(&process);
     process_destroy(&process);
@@ -540,8 +533,6 @@ void signal_handler(int sig) {
 
 
 int main(int argc, char ** argv/*, char **envp*/) {
-    struct user_info_t info;
-
     if (argc < 2) {
         ERROR("  Usage: %s process_pid \n", argv[0]);
         exit(-1);
@@ -570,15 +561,11 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
       ic_set_callback(&ic);
 
-      // TODO
-      info.func_call.ip = ic.ip;
-      info.func_call.callback_call = (callback_t) ic.cb;
-
       ic_debug(&ic);
 
       {
         struct stepper_t stepper;
-        stepper_run(&stepper, &input, info.func_call);
+        stepper_run(&stepper, &input, &ic);
       }
 
       ic_destroy(&ic);
