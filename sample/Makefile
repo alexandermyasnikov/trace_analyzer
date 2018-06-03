@@ -1,27 +1,46 @@
 
-all:
-	gcc -O0 hello.c -o hello
-	objdump -S -D hello > hello.dump
-	gcc -S hello.c -o hello.s
+# export LD_LIBRARY_PATH=$PWD:$LD_LIBRARY_PATH
 
+all: hello many_sample fork callbacks.so
+
+hello: hello.c
+	echo making $@ ...
+	gcc -O0 hello.c -o hello
+	gcc -S hello.c -o hello.s
+	objdump -S -D hello > hello.dump
+
+fork: fork.c libfunc.so
+	echo making $@ ...
+	gcc -O0 fork.c -o fork -L. -lfunc
+
+many_sample: many_sample.c libmany.so
+	echo making $@ ...
+	gcc -O3 many_sample.c -o many_sample -L. -lmany
+
+
+
+callbacks.so: callbacks.c
+	echo making $@ ...
 	gcc -c callbacks.c -o callbacks.o -fPIC
 	gcc -shared -o callbacks.so callbacks.o
 
+libfunc.so: func.c
+	echo making $@ ...
 	gcc -c func.c -o func.o -fPIC
 	gcc -shared -o libfunc.so func.o
 
+libmany.so: many.c
+	echo making $@ ...
 	gcc -O3 -c many.c -o many.o -fPIC
 	gcc -O3 -shared -o libmany.so many.o
 
-	gcc -O0 fork.c -o fork -L. -lfunc -Wl,-rpath=.
 
-	gcc -O3 many_sample.c -o many_sample -L. -lmany -Wl,-rpath=.
 
 clean:
 	rm -rf hello hello.dump hello.s
-	rm -rf callbacks.o callbacks.so
-	rm -rf func.o libfunc.so
-	rm -rf many.o libmany.so
 	rm -rf fork
 	rm -rf many_sample
+	rm -rf callbacks.o callbacks.so
+	rm -rf libfunc.so func.o
+	rm -rf libmany.so many.o
 
