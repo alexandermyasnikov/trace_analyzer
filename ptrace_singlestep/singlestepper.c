@@ -18,7 +18,7 @@
 #define DEBUG(a...) { fprintf(stderr, "DEBUG [%d, %s, %d] ", getpid(), __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 #define DEBUG_STEPPER(a...) // { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 
-#define TIMEOUT_CHECK_LOCK_FILE   10
+#define TIMEOUT_CHECK_LOCK_FILE   5
 #define LOCK_FILE_NAME            "/tmp/SINGLE_STEPPER_LOCK"
 #define PROCESS_MAX_COUNT         10
 
@@ -98,6 +98,7 @@ int stepper_wait(struct stepper_t* context);
 
 
 void print_info(FILE *stream, struct user_info_t* info);
+int inject_data(pid_t pid, unsigned char *src, void *dst, int len);
 void signal_handler(int sig);
 
 
@@ -397,9 +398,6 @@ int process_check_status(struct process_t* context) {
   int status;
   waitpid(newpid, &status, 0);
 
-  // ptrace(PTRACE_ATTACH, newpid, NULL, NULL);
-  ptrace(PTRACE_DETACH, newpid, NULL, NULL); // XXX
-
   pid_t child_pid = fork();
 
   if (child_pid == 0) { // child.
@@ -411,6 +409,7 @@ int process_check_status(struct process_t* context) {
     process_destroy(&process);
     exit(0);
   } else if (child_pid > 0) { // parent.
+    ptrace(PTRACE_DETACH, newpid, NULL, NULL);
     if (process_add_children(context, child_pid)) {
       kill(child_pid, SIGUSR1);
     }
@@ -511,6 +510,22 @@ void print_info(FILE *stream, struct user_info_t* info) {
 
 
 
+int inject_data(pid_t pid, unsigned char *src, void *dst, int len) {
+  int       i;
+  long long *s = (long long *) src;
+  long long *d = (long long *) dst;
+
+  for (i = 0; i < len; i += sizeof(long long), s++, d++) {
+    if ((ptrace (PTRACE_POKETEXT, pid, d, *s)) < 0) {
+      perror ("ptrace(POKETEXT)");
+      return -1;
+    }
+  }
+  return 0;
+}
+
+
+
 void signal_handler(int sig) {
   DEBUG("sig %d \n", sig);
   switch (sig) {
@@ -539,7 +554,7 @@ int main(int argc, char ** argv/*, char **envp*/) {
       .pid = atoi(argv[1]),
       .callbacks_library = "./sample/callbacks.so",
       .wrapper_function_name = "sum_call",
-      .original_function_name = "func_10",
+      .original_function_name = "sum2",
     };
 
     {
@@ -569,21 +584,6 @@ int main(int argc, char ** argv/*, char **envp*/) {
       ic_destroy(&ic);
     }
 
-
     return 0;
-}
-
-int inject_data(pid_t pid, unsigned char *src, void *dst, int len) {
-  int       i;
-  long long *s = (long long *) src;
-  long long *d = (long long *) dst;
-
-  for (i = 0; i < len; i += sizeof(long long), s++, d++) {
-    if ((ptrace (PTRACE_POKETEXT, pid, d, *s)) < 0) {
-      perror ("ptrace(POKETEXT)");
-      return -1;
-    }
-  }
-  return 0;
 }
 
