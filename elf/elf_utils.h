@@ -198,12 +198,55 @@ Elf64_Addr lookup_symbol(Elf64_Ehdr* elf_hdr, const char *symname) {
     if (elf_shdr->sh_type == SHT_SYMTAB) {
       for (unsigned long j = 0; j < elf_shdr->sh_size; j += sizeof(Elf64_Sym)) {
         Elf64_Sym* symtab = (Elf64_Sym*) (((char*) elf_hdr) + elf_shdr->sh_offset + j);
-        if (symtab->st_name == offset) {
+        if (offset && symtab->st_name == offset) {
           return symtab->st_value;
         }
       }
     }
   }
   return 0;
+}
+
+Elf64_Addr lookup_symbols(Elf64_Ehdr* elf_hdr, const char *symname, long addr) {
+  long ret = 0;
+
+  for (unsigned long i = 0; i < elf_hdr->e_shnum; ++i) {
+    Elf64_Shdr* elf_shdr = (Elf64_Shdr*) ((void*) elf_hdr + elf_hdr->e_shoff + i * sizeof(Elf64_Shdr));
+    if (elf_shdr->sh_type == SHT_SYMTAB) {
+      for (unsigned long j = 0; j < elf_shdr->sh_size; j += sizeof(Elf64_Sym)) {
+        Elf64_Sym* symtab = (Elf64_Sym*) (((char*) elf_hdr) + elf_shdr->sh_offset + j);
+        fprintf(stderr, "  (j, addr):   %lx   %lx   %lx \n", j, j / sizeof(Elf64_Sym), symtab->st_value + addr);
+        if (STT_FUNC == ELF32_ST_TYPE(symtab->st_info) && symtab->st_value) {
+
+          for (unsigned long i = 0; i < elf_hdr->e_shnum; ++i) {
+            Elf64_Shdr* elf_shdr = (Elf64_Shdr*) ((void*) elf_hdr + elf_hdr->e_shoff + i * sizeof(Elf64_Shdr));
+            if (elf_shdr->sh_type == SHT_STRTAB) {
+              char* name = (((char*) elf_hdr) + elf_shdr->sh_offset);
+              unsigned long ind = symtab->st_name - 1;
+              if (ind < elf_shdr->sh_size - 1 && name[ind] == 0x00) {
+                ind++;
+                fprintf(stderr, "  (j, addr):   %lx   %lx \n", j, symtab->st_value + addr);
+                fprintf(stderr, "  name[ind]:   %s   \n", &name[ind]);
+                fprintf(stderr, "  st_name      %x   \n", symtab->st_name);
+                fprintf(stderr, "  st_info:     %hhx \n", symtab->st_info);
+                fprintf(stderr, "  st_other:    %hhx \n", symtab->st_other);
+                fprintf(stderr, "  st_shndx:    %hx  \n", symtab->st_shndx);
+                fprintf(stderr, "  st_value:    %lx  \n", symtab->st_value);
+                fprintf(stderr, "  st_size:     %lx  \n", symtab->st_size);
+                fprintf(stderr, " \n");
+
+                if(strcmp(&name[ind], symname) == 0) {
+                  ret = symtab->st_value;
+                }
+                break;
+              }
+            }
+          }
+
+        }
+      }
+    }
+  }
+  return ret;
 }
 
