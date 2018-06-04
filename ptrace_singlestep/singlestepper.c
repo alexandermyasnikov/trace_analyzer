@@ -16,7 +16,9 @@
 #define TRACE(a...) { fprintf(stderr, "TRACE [%d, %s, %d] ", getpid(), __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 #define ERROR(a...) { fprintf(stderr, "ERROR [%d, %s, %d] ", getpid(), __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 #define DEBUG(a...) { fprintf(stderr, "DEBUG [%d, %s, %d] ", getpid(), __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
-#define DEBUG_STEPPER(a...) // { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
+#define DEBUG_STEPPER(a...) { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
+
+#define DEBUG_LOOKUP 1
 
 #define TIMEOUT_CHECK_LOCK_FILE   5
 #define LOCK_FILE_NAME            "/tmp/SINGLE_STEPPER_LOCK"
@@ -123,7 +125,11 @@ int context_symbols_init(struct elf_symbols_t* context, const char* callbacks_sh
 }
 
 int context_symbols_lookup(struct elf_symbols_t* context, const char* funcname, Elf64_Addr* addr) {
-  *addr = lookup_symbol(context->elf, funcname);
+  #if DEBUG_LOOKUP
+    *addr = lookup_symbols(context->elf, funcname, *addr);
+  #else
+    *addr = lookup_symbol(context->elf, funcname);
+  #endif
   return addr == 0;
 }
 
@@ -253,7 +259,7 @@ int pm_get_ip(struct pm_t* context, const char* fn, unsigned long long int* ip) 
 
   while ((getline(&line, &len, context->maps)) != -1) {
     sscanf(line, "%llx-%llx %4s %llx %*s %*s %499s", &addr1, &addr2, perm, &offset, pathname);
-    // DEBUG("addr: %16llx %16llx %16llx '%s' '%s' \n", addr1, addr2, offset, perm, pathname);
+    DEBUG("addr: %16llx %16llx %16llx '%s' '%s' \n", addr1, addr2, offset, perm, pathname);
     if ('x' == perm[2] && '/' == pathname[0]) {
       DEBUG("addr: %16llx %16llx %16llx '%s' '%s' \n", addr1, addr2, offset, perm, pathname);
 
@@ -261,14 +267,16 @@ int pm_get_ip(struct pm_t* context, const char* fn, unsigned long long int* ip) 
         struct elf_symbols_t elf_symbols;
         context_symbols_init(&elf_symbols, pathname);
 
-        Elf64_Addr addr = 0;
+        Elf64_Addr addr = addr1;
         context_symbols_lookup(&elf_symbols, fn, &addr);
 
         context_symbols_destroy(&elf_symbols);
 
         if (addr) {
           *ip = addr + addr1;
-          break;
+          #if !DEBUG_LOOKUP
+            break;
+          #endif
         }
       }
     }
