@@ -357,6 +357,28 @@ int process_check_regs(struct process_t* context) {
 
   long ins = ptrace(PTRACE_PEEKTEXT, context->pid, context->user_info.regs.rip, NULL);
   DEBUG_STEPPER("INS:  %16lx   %16llx \n", ins, context->user_info.regs.rip);
+  long ins_copy = ins;
+
+  unsigned char opcode = ins & 0xFF;
+  ins_copy >>= 8;
+
+  if (opcode == 0xE8) {
+    int ptr_offset = ins_copy & 0xFFFFFFFF;
+    long ptr = context->user_info.regs.rip + ptr_offset + sizeof(opcode) + sizeof(ptr_offset);
+    DEBUG_STEPPER("  %hhx CALL   ptr: %x %lx \n", opcode, ptr_offset, ptr);
+    DEBUG_STEPPER("arg1 rdi: %llx \n", context->user_info.regs.rdi);
+    DEBUG_STEPPER("arg2 rsi: %llx \n", context->user_info.regs.rsi);
+    DEBUG_STEPPER("arg3 rdx: %llx \n", context->user_info.regs.rdx);
+    DEBUG_STEPPER("arg4 rcx: %llx \n", context->user_info.regs.rcx);
+    DEBUG_STEPPER("arg5  r8: %llx \n", context->user_info.regs.r8);
+    DEBUG_STEPPER("arg6  r9: %llx \n", context->user_info.regs.r9);
+
+  } else if (opcode == 0xC3) {
+    DEBUG_STEPPER("  %hhx RET \n", opcode);
+    DEBUG_STEPPER("ret rax: %llx \n", context->user_info.regs.rax);
+  }
+
+
 
   if (context->user_info.regs.rip == context->user_info.ic.ip) {
     if (context->user_info.ic.cb) {
