@@ -578,8 +578,8 @@ void signal_handler(int sig) {
 
 
 int main(int argc, char ** argv/*, char **envp*/) {
-    if (argc < 2) {
-        ERROR("  Usage: %s process_pid \n", argv[0]);
+    if (argc < 3) {
+        ERROR("  Usage: %s process_pid config_name \n", argv[0]);
         exit(-1);
     }
 
