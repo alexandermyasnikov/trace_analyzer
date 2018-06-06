@@ -16,9 +16,10 @@
 #define TRACE(a...) { fprintf(stderr, "TRACE [%d, %s, %d] ", getpid(), __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 #define ERROR(a...) { fprintf(stderr, "ERROR [%d, %s, %d] ", getpid(), __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 #define DEBUG(a...) { fprintf(stderr, "DEBUG [%d, %s, %d] ", getpid(), __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
-#define DEBUG_STEPPER(a...) { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
+#define DEBUG_STEPPER(a...) // { fprintf(stderr, "[%s, %d] stepper: ", __FUNCTION__, __LINE__); fprintf(stderr, a); fflush(stderr); }
 
-#define DEBUG_LOOKUP 1
+#define DEBUG_LOOKUP 0
+#define DEBUG_INSTRUCTION 0
 
 #define TIMEOUT_CHECK_LOCK_FILE   5
 #define LOCK_FILE_NAME            "/tmp/SINGLE_STEPPER_LOCK"
@@ -34,7 +35,7 @@ volatile int break_flag = 0;
 
 
 
-typedef void (*callback_t) (struct user_regs_struct*);
+typedef void (*regs_callback_t) (struct user_regs_struct*);
 
 
 
@@ -56,17 +57,6 @@ int context_dl_destroy(struct context_dl_t* context);
 
 
 
-struct ic_t;
-int ic_init(struct ic_t* context, const char* shn, const char* fn);
-int ic_destroy(struct ic_t* context);
-int ic_debug(struct ic_t* context);
-
-
-
-struct user_info_t;
-
-
-
 struct pm_t;
 int pm_init(struct pm_t* context, pid_t pid);
 int pm_get_ip(struct pm_t* context, const char* fn, unsigned long long int* ip);
@@ -74,8 +64,19 @@ int pm_destroy(struct pm_t* context);
 
 
 
+struct callback_t;
+struct callbacks_t;
+int callbacks_init(struct callbacks_t* context, struct input_t* input);
+int callbacks_destroy(struct callbacks_t* context);
+
+
+
+struct user_info_t;
+
+
+
 struct process_t;
-int process_init(struct process_t* context, pid_t pid, struct ic_t* ic);
+int process_init(struct process_t* context, pid_t pid, struct callbacks_t* callbacks);
 int process_run(struct process_t* context);
 int process_singlestep(struct process_t* context);
 int process_check_regs(struct process_t* context);
@@ -87,7 +88,7 @@ int process_destroy(struct process_t* context);
 
 
 struct stepper_t stepper;
-int stepper_run(struct stepper_t* context, struct input_t* input, struct ic_t* ic);
+int stepper_run(struct stepper_t* context, int pid, struct callbacks_t* callbacks);
 int stepper_wait(struct stepper_t* context);
 
 
@@ -103,10 +104,8 @@ void signal_handler(int sig);
 
 
 struct input_t {
-  int           pid;
-  const char*   callbacks_library;
-  const char*   wrapper_function_name;
-  const char*   original_function_name;
+  int   pid;
+  char* config_name;
 };
 
 
@@ -169,60 +168,6 @@ int context_dl_destroy(struct context_dl_t* context) {
 
 
 
-struct ic_t { // instruction_callback_t
-  unsigned long long int ip;    // instruction_pointer
-  const char*   shn;   // shared_name
-  const char*   fn;    // function_name
-  void*         cb;    // callback
-  struct context_dl_t dl;
-};
-
-int ic_init(struct ic_t* context, const char* shn, const char* fn) {
-  TRACE(" \n");
-  context->ip = 0;
-  context->shn = shn;
-  context->fn = fn;
-  context->cb = NULL;
-  context_dl_init(&context->dl, context->shn);
-  TRACE("~ \n");
-  return 0;
-}
-
-int ic_destroy(struct ic_t* context) {
-  TRACE(" \n");
-  context->ip = 0;
-  context->shn = NULL;
-  context->fn = NULL;
-  context->cb = NULL;
-  context_dl_destroy(&context->dl);
-  TRACE("~ \n");
-  return 0;
-}
-
-int ic_debug(struct ic_t* context){
-  TRACE(" \n");
-  DEBUG("ic: {ip: %16llx, shn: '%s', fn: '%s', cb: %p} \n",
-      context->ip, context->shn, context->fn, context->cb);
-  TRACE("~ \n");
-  return 0;
-}
-
-int ic_set_callback(struct ic_t* context) {
-  TRACE(" \n");
-  context_dl_sym(&context->dl, context->fn, &context->cb);
-  TRACE("~ \n");
-  return 0;
-}
-
-
-
-struct user_info_t {
-  struct user_regs_struct regs;
-  struct ic_t ic;
-};
-
-
-
 struct pm_t { // proc_maps_t
   pid_t pid;
   FILE* maps;
@@ -234,7 +179,7 @@ int pm_init(struct pm_t* context, pid_t pid) {
   snprintf(maps_path, 50, "/proc/%d/maps", pid);
 
   context->maps = fopen(maps_path, "r");
-  if(!context->maps){
+  if(!context->maps) {
     ERROR("  Cannot open the memory maps, %s\n", strerror(errno));
     return -1;
   }
@@ -259,9 +204,8 @@ int pm_get_ip(struct pm_t* context, const char* fn, unsigned long long int* ip) 
 
   while ((getline(&line, &len, context->maps)) != -1) {
     sscanf(line, "%llx-%llx %4s %llx %*s %*s %499s", &addr1, &addr2, perm, &offset, pathname);
-    DEBUG("addr: %16llx %16llx %16llx '%s' '%s' \n", addr1, addr2, offset, perm, pathname);
     if ('x' == perm[2] && '/' == pathname[0]) {
-      DEBUG("addr: %16llx %16llx %16llx '%s' '%s' \n", addr1, addr2, offset, perm, pathname);
+      // DEBUG("addr: %16llx %16llx %16llx '%s' '%s' \n", addr1, addr2, offset, perm, pathname);
 
       {
         struct elf_symbols_t elf_symbols;
@@ -302,6 +246,77 @@ int pm_destroy(struct pm_t* context) {
 
 
 
+struct callback_t {
+  unsigned long long int ip;
+  char   shared_name[100];
+  char   function_name_original[100];
+  char   function_name_wrapper[100];
+  void*  callback;
+};
+
+
+
+struct callbacks_t {
+  struct callback_t callbacks[100];
+  int count;
+  struct context_dl_t dl;
+};
+
+int callbacks_init(struct callbacks_t* context, struct input_t* input) {
+  TRACE(" \n");
+
+  FILE* file = fopen(input->config_name, "r");
+  if(!file) {
+    ERROR("  Cannot open file '%s', %s\n", input->config_name, strerror(errno));
+    return -1;
+  }
+
+  char* line = NULL;
+  size_t len = 0;
+  size_t index = 0;
+  size_t index_max = sizeof(context->callbacks) / sizeof(context->callbacks[0]);
+
+  while (getline(&line, &len, file) != -1 && index < index_max) {
+    struct callback_t* cb = &context->callbacks[index++];
+    sscanf(line, "%99s %99s %99s", cb->shared_name, cb->function_name_original, cb->function_name_wrapper);
+
+    DEBUG("names: '%s' '%s' '%s' \n", cb->shared_name, cb->function_name_original, cb->function_name_wrapper);
+  }
+
+  index_max = index;
+  context->count = index_max;
+
+  fclose(file);
+
+  struct pm_t pm;
+  context_dl_init(&context->dl, context->callbacks[0].shared_name); // TODO
+  pm_init(&pm, input->pid);
+
+  for (index = 0; index < index_max; ++index) {
+    struct callback_t* cb = &context->callbacks[index];
+    context_dl_sym(&context->dl, cb->function_name_wrapper, &cb->callback);
+    pm_get_ip(&pm, cb->function_name_original, &cb->ip);
+    DEBUG("function_wrapper: '%s' %p \n", cb->function_name_wrapper, cb->callback);
+    DEBUG("function_original: '%s' %llx \n", cb->function_name_original, cb->ip);
+  }
+
+  pm_destroy(&pm);
+
+  TRACE("~ \n");
+  return 0;
+}
+
+int callbacks_destroy(struct callbacks_t* context) {
+  return context_dl_destroy(&context->dl);
+}
+
+
+
+struct user_info_t {
+  struct user_regs_struct regs;
+  struct callbacks_t callbacks;
+};
+
 
 
 struct process_t {
@@ -311,11 +326,11 @@ struct process_t {
   int status;
 };
 
-int process_init(struct process_t* context, pid_t pid, struct ic_t* ic) {
+int process_init(struct process_t* context, pid_t pid, struct callbacks_t* callbacks) {
   TRACE(" \n");
   context->pid = pid;
   memset(&context->children, 0x00, sizeof(context->children));
-  context->user_info.ic = *ic;
+  context->user_info.callbacks = *callbacks;
   context->status = 0;
 
   ptrace(PTRACE_ATTACH, context->pid, NULL, NULL);
@@ -355,6 +370,7 @@ int process_check_regs(struct process_t* context) {
     return -1;
   }
 
+  #if DEBUG_INSTRUCTION
   long ins = ptrace(PTRACE_PEEKTEXT, context->pid, context->user_info.regs.rip, NULL);
   DEBUG_STEPPER("INS:  %16lx   %16llx \n", ins, context->user_info.regs.rip);
   long ins_copy = ins;
@@ -377,16 +393,15 @@ int process_check_regs(struct process_t* context) {
     DEBUG_STEPPER("  %hhx RET \n", opcode);
     DEBUG_STEPPER("ret rax: %llx \n", context->user_info.regs.rax);
   }
+  #endif
 
-
-
-  if (context->user_info.regs.rip == context->user_info.ic.ip) {
-    if (context->user_info.ic.cb) {
-      ((callback_t) context->user_info.ic.cb)(&context->user_info.regs);
+  struct callbacks_t* cbs = &context->user_info.callbacks;
+  for (int i = 0; i < cbs->count; ++i) {
+    if (context->user_info.regs.rip == cbs->callbacks[i].ip
+        && cbs->callbacks[i].ip && cbs->callbacks[i].callback) {
+      ((regs_callback_t) cbs->callbacks[i].callback)(&context->user_info.regs);
     }
   }
-
-  // ptrace(PTRACE_SETREGS, context->pid, NULL, &info->regs); // XXX
 
   // print_info(stderr, info);
 
@@ -426,7 +441,7 @@ int process_check_status(struct process_t* context) {
   if (child_pid == 0) { // child.
     DEBUG("new pid %d for %ld\n", getpid(), newpid);
     struct process_t process;
-    process_init(&process, newpid, &context->user_info.ic);
+    process_init(&process, newpid, &context->user_info.callbacks);
     process_run(&process);
     process_wait_children(&process);
     process_destroy(&process);
@@ -468,14 +483,14 @@ struct stepper_t {
   pid_t child_pid;
 };
 
-int stepper_run(struct stepper_t* context, struct input_t* input, struct ic_t* ic) {
+int stepper_run(struct stepper_t* context, int pid, struct callbacks_t* callbacks) {
   TRACE(" \n");
   context->child_pid = fork();
 
   if (context->child_pid == 0) {
-    DEBUG("new pid %d \n", input->pid);
+    DEBUG("new pid %d \n", pid);
     struct process_t process;
-    process_init(&process, input->pid, ic);
+    process_init(&process, pid, callbacks);
     process_run(&process);
     process_wait_children(&process);
     process_destroy(&process);
@@ -573,32 +588,17 @@ int main(int argc, char ** argv/*, char **envp*/) {
 
     struct input_t input = {
       .pid = atoi(argv[1]),
-      .callbacks_library = "./sample/callbacks.so",
-      .wrapper_function_name = "sum_call",
-      .original_function_name = "sum2",
+      .config_name = argv[2],
     };
 
     {
-      struct ic_t ic;
-      ic_init(&ic, input.callbacks_library, input.wrapper_function_name);
+      struct callbacks_t callbacks;
+      callbacks_init(&callbacks, &input);
 
-      {
-        struct pm_t pm;
-        pm_init(&pm, input.pid);
-        pm_get_ip(&pm, input.original_function_name, &ic.ip);
-        pm_destroy(&pm);
-      }
+      struct stepper_t stepper;
+      stepper_run(&stepper, input.pid, &callbacks);
 
-      ic_set_callback(&ic);
-
-      ic_debug(&ic);
-
-      {
-        struct stepper_t stepper;
-        stepper_run(&stepper, &input, &ic);
-      }
-
-      ic_destroy(&ic);
+      callbacks_destroy(&callbacks);
     }
 
     return 0;
