@@ -577,30 +577,30 @@ void signal_handler(int sig) {
 
 
 
-int main(int argc, char ** argv/*, char **envp*/) {
-    if (argc < 3) {
-        ERROR("  Usage: %s process_pid config_name \n", argv[0]);
-        exit(-1);
-    }
+int main(int argc, char ** argv) {
+  if (argc < 3) {
+    ERROR("  Usage: %s process_pid config_name \n", argv[0]);
+    exit(-1);
+  }
 
-    signal(SIGUSR1, signal_handler);
-    signal(SIGINT,  signal_handler);
+  signal(SIGUSR1, signal_handler);
+  signal(SIGINT,  signal_handler);
 
-    struct input_t input = {
-      .pid = atoi(argv[1]),
-      .config_name = argv[2],
-    };
+  struct input_t input = {
+    .pid = atoi(argv[1]),
+    .config_name = argv[2],
+  };
 
-    {
-      struct callbacks_t callbacks;
-      callbacks_init(&callbacks, &input);
+  {
+    struct callbacks_t callbacks;
+    callbacks_init(&callbacks, &input);
 
-      struct stepper_t stepper;
-      stepper_run(&stepper, input.pid, &callbacks);
+    struct stepper_t stepper;
+    stepper_run(&stepper, input.pid, &callbacks);
 
-      callbacks_destroy(&callbacks);
-    }
+    callbacks_destroy(&callbacks);
+  }
 
-    return 0;
+  return 0;
 }
 
