@@ -11,20 +11,21 @@
 
 
 
-struct pids_t;
-int pids_init(struct pids_t* context, char* program_name);
-int pids_desroy(struct pids_t* context);
-int pids_add_pid(struct pids_t* context, int pid);
-int pids_check_process(struct pids_t* context);
-
-
-
 struct input_t;
 
 
 
+struct pids_t;
+int pids_init(struct pids_t* context, struct input_t* input);
+int pids_desroy(struct pids_t* context);
+int pids_add_pid(struct pids_t* context, int pid);
+int pids_check_process(struct pids_t* context);
+int pids_process(struct pids_t* context);
+
+
+
 struct input_t {
-  char program_name[100];
+  char* program_name;
 };
 
 
@@ -34,9 +35,9 @@ struct pids_t {
   char cmd[100];
 };
 
-int pids_init(struct pids_t* context, char* program_name) {
+int pids_init(struct pids_t* context, struct input_t* input) {
   memset(&context->pids, 0x00, sizeof(context->pids));
-  snprintf(context->cmd, 100, "pgrep -a \"%s\";", program_name);
+  snprintf(context->cmd, sizeof(context->cmd), "pgrep -a \"%s\";", input->program_name);
   return 0;
 }
 
@@ -76,27 +77,39 @@ int pids_check_process(struct pids_t* context) {
   return ret;
 }
 
+int pids_process(struct pids_t* context) {
+  for (int i = 0; i < MAX_PID_COUNT; ++i) {
+    if (context->pids[i])
+      fprintf(stderr, "TODO fork pid: %d \n", context->pids[i]);
+  }
 
-int main() {
+  sleep(5);
+  return 0;
+}
 
-  // struct input_t input;
 
-  struct pids_t pids;
-  pids_init(&pids, "fork");
+
+int main(int argc, char ** argv) {
+  if (argc < 2) {
+    fprintf(stderr, "  Usage: %s program_name \n", argv[0]);
+    exit(-1);
+  }
+
+  struct input_t input = {
+    .program_name = argv[1],
+  };
 
   while (1) {
+    struct pids_t pids;
+    pids_init(&pids, &input);
+
     if (pids_check_process(&pids))
-      break;
+      pids_process(&pids);
+
+    pids_desroy(&pids);
 
     sleep(TIMEOUT_CHECK_PROCESS);
   }
-
-  for (int i = 0; i < MAX_PID_COUNT; ++i) {
-    if (pids.pids[i])
-      fprintf(stderr, "TODO fork pid: %d \n", pids.pids[i]);
-  }
-
-  pids_desroy(&pids);
 
   return 0;
 }
