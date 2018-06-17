@@ -35,7 +35,7 @@ volatile int break_flag = 0;
 
 
 
-typedef void (*regs_callback_t) (struct user_regs_struct*);
+typedef void (*regs_callback_t) (void*);
 
 
 
@@ -93,7 +93,6 @@ int stepper_wait(struct stepper_t* context);
 
 
 
-void print_info(FILE *stream, struct user_info_t* info);
 int inject_data(pid_t pid, unsigned char *src, void *dst, int len);
 void signal_handler(int sig);
 
@@ -321,8 +320,8 @@ struct user_info_t {
 
 struct process_t {
   pid_t pid;
-  pid_t children[PROCESS_MAX_COUNT];
   struct user_info_t user_info;
+  pid_t children[PROCESS_MAX_COUNT];
   int status;
 };
 
@@ -399,11 +398,9 @@ int process_check_regs(struct process_t* context) {
   for (int i = 0; i < cbs->count; ++i) {
     if (context->user_info.regs.rip == cbs->callbacks[i].ip
         && cbs->callbacks[i].ip && cbs->callbacks[i].callback) {
-      ((regs_callback_t) cbs->callbacks[i].callback)(&context->user_info.regs);
+      ((regs_callback_t) cbs->callbacks[i].callback)(context);
     }
   }
-
-  // print_info(stderr, info);
 
   return 0;
 }
@@ -528,22 +525,6 @@ int stepper_wait(struct stepper_t* context) {
 
   TRACE("~ \n");
   return 0;
-}
-
-
-
-void print_info(FILE *stream, struct user_info_t* info) {
-  fprintf(stream, "rbp:  %16llx \n", info->regs.rbp);
-  fprintf(stream, "rsp:  %16llx \n", info->regs.rsp);
-  fprintf(stream, "rip:  %16llx \n", info->regs.rip);
-  fprintf(stream, "rax:  %16llx \n", info->regs.rax);
-  fprintf(stream, "rdi_: %16llx \n", info->regs.rdi);
-  fprintf(stream, "rsi_: %16llx \n", info->regs.rsi);
-  fprintf(stream, "rdx_: %16llx \n", info->regs.rdx);
-  fprintf(stream, "rcx_: %16llx \n", info->regs.rcx);
-  fprintf(stream, "r8_:  %16llx \n", info->regs.r8);
-  fprintf(stream, "r9_:  %16llx \n", info->regs.r9);
-  fprintf(stream, " \n\n");
 }
 
 
