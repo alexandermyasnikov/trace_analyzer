@@ -7,6 +7,23 @@
 #include <string.h>
 #include <sys/ptrace.h>
 
+
+#define offset_init(n) long offset = n;
+
+#define read_by_value(data, ptr, pid, offset) \
+  if (sizeof(data) <= sizeof(void *)) { \
+    memcpy(&data, (void *) &ptr, sizeof(data)); \
+  } else { \
+    peek_data(pid, (void *) offset, &data, sizeof(data)); \
+    offset += sizeof(data); \
+  }
+
+#define read_by_pointer(data, ptr, pid, offset) \
+  peek_data(pid, (void *) ptr + offset, &data, sizeof(data)); \
+  offset += sizeof(data);
+
+
+
 struct process_t;
 
 typedef void (*regs_callback_t) (struct process_t*);
@@ -116,7 +133,8 @@ void w_test_char4_1(struct process_t* process) {
     char d;
   } char4;
 
-  memcpy(&char4, (void *) &regs->rdi, sizeof(char4));
+  offset_init(0);
+  read_by_value(char4, regs->rdi, process->pid, offset);
 
   fprintf(stderr, "  CALL: %16llx : int test_char4_1((struct char4) { "
       "(char) %hhd, (char) %hhd, (char) %hhd, (char) %hhd }) \n",
@@ -133,7 +151,8 @@ void w_test_char4_2(struct process_t* process) {
     char d;
   } char4;
 
-  peek_data(process->pid, (void *) regs->rdi, &char4, sizeof(char4));
+  offset_init(0);
+  read_by_pointer(char4, regs->rdi, process->pid, offset);
 
   fprintf(stderr, "  CALL: %16llx : int test_char4_2((struct char4*) { "
       "(char) %hhd, (char) %hhd, (char) %hhd, (char) %hhd }) \n",
@@ -151,6 +170,8 @@ void w_test_s4_1(struct process_t* process) {
   } s4;
 
   peek_data(process->pid, (void *) regs->rsp + 8, &s4, sizeof(s4));
+  // offset_init(8);
+  // read_by_value(s4, regs->rsp, process->pid, offset); // TODO. rsp or &rdi
 
   fprintf(stderr, "  CALL: %16llx : int test_s4_1((struct s4_t) { (char) %hhd, (long) %ld, (int) %d, (long) %ld }) \n",
       regs->rbp, s4.a, s4.b, s4.c, s4.d);
@@ -166,7 +187,8 @@ void w_test_s4_2(struct process_t* process) {
     long d;
   } s4;
 
-  peek_data(process->pid, (void *) regs->rdi, &s4, sizeof(s4));
+  offset_init(0);
+  read_by_pointer(s4, regs->rdi, process->pid, offset);
 
   fprintf(stderr, "  CALL: %16llx : int test_s4_2((struct s4*) { "
       "(char) %hhd, (long) %ld, (int) %d, (long) %ld }) \n",
