@@ -23,7 +23,7 @@ int main() {
   if (child_pid == 0) {
     fprintf(stdout, "pid: %d \n", getpid());
     for (int i = 0; i < 10000; ++i) {
-      int ret = sum(i, 1);
+      int ret = sum2(i, 1);
       fprintf(stdout, "func(...) return : %d \n", ret);
       sleep(5);
     }

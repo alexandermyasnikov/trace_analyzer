@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/ptrace.h>
 
 struct process_t;
@@ -98,7 +99,6 @@ void print_regs(struct process_t* process) {
 void sum_call(struct process_t* process) {
   struct user_regs_struct* regs = &process->regs;
   fprintf(stderr, "  CALL: %16llx : int sum((int) %d, (int) %d) \n", regs->rbp, regs->rdi, regs->rsi);
-  print_regs(process);
 }
 
 void sum_ret(struct process_t* process) {
@@ -106,3 +106,87 @@ void sum_ret(struct process_t* process) {
   fprintf(stderr, "  RET:  %16llx : return (int) %d \n", regs->rbp, regs->rax);
 }
 
+void w_test_char4_1(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+
+  struct char4_t {
+    char a;
+    char b;
+    char c;
+    char d;
+  } char4;
+
+  memcpy(&char4, (void *) &regs->rdi, sizeof(char4));
+
+  fprintf(stderr, "  CALL: %16llx : int test_char4_1((struct char4) { "
+      "(char) %hhd, (char) %hhd, (char) %hhd, (char) %hhd }) \n",
+      regs->rbp, char4.a, char4.b, char4.c, char4.d);
+}
+
+void w_test_char4_2(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+
+  struct char4_t {
+    char a;
+    char b;
+    char c;
+    char d;
+  } char4;
+
+  peek_data(process->pid, (void *) regs->rdi, &char4, sizeof(char4));
+
+  fprintf(stderr, "  CALL: %16llx : int test_char4_2((struct char4*) { "
+      "(char) %hhd, (char) %hhd, (char) %hhd, (char) %hhd }) \n",
+      regs->rbp, char4.a, char4.b, char4.c, char4.d);
+}
+
+void w_test_s4_1(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+
+  struct s4_t {
+    char a;
+    long b;
+    int  c;
+    long d;
+  } s4;
+
+  peek_data(process->pid, (void *) regs->rsp + 8, &s4, sizeof(s4));
+
+  fprintf(stderr, "  CALL: %16llx : int test_s4_1((struct s4_t) { (char) %hhd, (long) %ld, (int) %d, (long) %ld }) \n",
+      regs->rbp, s4.a, s4.b, s4.c, s4.d);
+}
+
+void w_test_s4_2(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+
+  struct s4_t {
+    char a;
+    long b;
+    int  c;
+    long d;
+  } s4;
+
+  peek_data(process->pid, (void *) regs->rdi, &s4, sizeof(s4));
+
+  fprintf(stderr, "  CALL: %16llx : int test_s4_2((struct s4*) { "
+      "(char) %hhd, (long) %ld, (int) %d, (long) %ld }) \n",
+      regs->rbp, s4.a, s4.b, s4.c, s4.d);
+}
+
+void w_test_args(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+
+  struct args_tail_t {
+    long v7;
+    long v8;
+    long v9;
+    long v10;
+  } args_tail;
+
+  peek_data(process->pid, (void *) regs->rsp + 8, &args_tail, sizeof(args_tail));
+
+  fprintf(stderr, "  CALL: %16llx : int test_args((int) %d, (int) %d, (int) %d,"
+      " (int) %d, (int) %d, (int) %d, (int) %d, (int) %d, (int) %d, (int) %d) \n",
+      regs->rbp, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8, regs->r9,
+      args_tail.v7, args_tail.v8, args_tail.v9, args_tail.v10);
+}

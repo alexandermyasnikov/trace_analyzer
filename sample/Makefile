@@ -1,7 +1,7 @@
 
 # export LD_LIBRARY_PATH=$PWD:$LD_LIBRARY_PATH
 
-all: hello many_sample fork callbacks.so
+all: hello fork many_sample func_sample callbacks.so
 
 hello: hello.c
 	echo making $@ ...
@@ -16,6 +16,10 @@ fork: fork.c libfunc.so
 many_sample: many_sample.c libmany.so
 	echo making $@ ...
 	gcc -O3 many_sample.c -o many_sample -L. -lmany
+
+func_sample: func_sample.c libfunc.so
+	echo making $@ ...
+	gcc -O0 func_sample.c -o func_sample -L. -lfunc
 
 
 
@@ -40,6 +44,7 @@ clean:
 	rm -rf hello hello.dump hello.s
 	rm -rf fork
 	rm -rf many_sample
+	rm -rf func_sample
 	rm -rf callbacks.o callbacks.so
 	rm -rf libfunc.so func.o
 	rm -rf libmany.so many.o
