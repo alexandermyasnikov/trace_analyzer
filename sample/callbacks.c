@@ -49,6 +49,23 @@ int peek_data(pid_t pid, void* src, void* dst, size_t len) {
 
 
 
+int peek_string(pid_t pid, void* src, void* dst, size_t limit) {
+  unsigned char *s = (unsigned char *) src;
+  unsigned char *d = (unsigned char *) dst;
+
+  for (size_t i = 0; i < limit; ++i) {
+    d[i] = 0xFF & ptrace(PTRACE_PEEKTEXT, pid, s + i, NULL);
+    if (!d[i])
+      return 0;
+    if (errno)
+      return -1;
+  }
+
+  return 0;
+}
+
+
+
 void print_regs(struct process_t* process) {
   struct user_regs_struct* regs = &process->regs;
 
@@ -190,3 +207,29 @@ void w_test_args(struct process_t* process) {
       regs->rbp, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8, regs->r9,
       args_tail.v7, args_tail.v8, args_tail.v9, args_tail.v10);
 }
+
+void w_libc_dlsym(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+  fprintf(stderr, "  CALL: %16llx : void* libc_dlsym((void*) %p, (char*) %p) \n", regs->rbp, regs->rdi, regs->rsi);
+}
+
+void w_libc_malloc(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+  fprintf(stderr, "  CALL: %16llx : void* libc_malloc((size_t) %lld) \n", regs->rbp, regs->rdi);
+}
+
+void w_libc_free(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+  fprintf(stderr, "  CALL: %16llx : void libc_free((void*) %p) \n", regs->rbp, regs->rdi);
+}
+
+void w_fprintf(struct process_t* process) {
+  struct user_regs_struct* regs = &process->regs;
+
+  char str[100];
+  peek_data(process->pid, (void *) regs->rsi, str, sizeof(str));
+
+  fprintf(stderr, "  CALL: %16llx : int fprintf((FILE*) %p, (char*) '%.*s', ...) \n",
+      regs->rbp, regs->rdi, sizeof(str), str);
+}
+
